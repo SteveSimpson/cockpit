@@ -54,7 +54,7 @@
  * looks like 0::/system.slice/system-cockpit\x2dwsinstance\x2dhttps.slice/cockpit-wsinstance-https@123abc.service
  * returns "123abc" instance name (static string)
  */
-static const char*
+static const char *
 get_ws_https_instance (void)
 {
   int r;
@@ -217,8 +217,8 @@ cockpit_validateX509 (const char *certificate)
  * logged).
  */
 ssize_t
-https_instance_has_certificate_file (char *contents,
-                                     size_t contents_size)
+https_instance_has_certificate_file (char   *contents,
+                                     size_t  contents_size)
 {
   const char *https_instance = get_ws_https_instance ();
   int dirfd = -1, filefd = -1;
@@ -253,8 +253,7 @@ https_instance_has_certificate_file (char *contents,
 
   if (!S_ISREG (buf.st_mode))
     {
-      warnx (
-          "Could not read certificate: /run/cockpit/tls/%s is not a regular file", https_instance);
+      warnx ("Could not read certificate: /run/cockpit/tls/%s is not a regular file", https_instance);
       goto out;
     }
 
@@ -283,9 +282,8 @@ https_instance_has_certificate_file (char *contents,
         }
       if (r != buf.st_size)
         {
-          warnx (
-              "Read incomplete contents of certificate file /run/cockpit/tls/%s: %zu of %zu bytes",
-              https_instance, r, (size_t) buf.st_size);
+          warnx ("Read incomplete contents of certificate file /run/cockpit/tls/%s: %zu of %zu bytes",
+                 https_instance, r, (size_t) buf.st_size);
           goto out;
         }
 
