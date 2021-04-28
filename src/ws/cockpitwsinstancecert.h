@@ -21,8 +21,6 @@
 
 #include <sys/types.h>
 
-
 ssize_t
 https_instance_has_certificate_file (char *contents,
                                      size_t contents_length);
-
