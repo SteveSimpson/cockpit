@@ -17,7 +17,6 @@
  * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
  */
 
-
 #ifdef HAVE_CONFIG_H
 #include <config.h>
 #endif
@@ -35,6 +34,14 @@
 #include <unistd.h>
 
 #include "../tls/utils.h"
+
+#include <openssl/x509v3.h>
+#include <openssl/bn.h>
+#include <openssl/asn1.h>
+#include <openssl/x509.h>
+#include <openssl/x509_vfy.h>
+#include <openssl/pem.h>
+#include <openssl/bio.h>
 
 #define CGROUP_REGEX         "^(0:|1:name=systemd):/system.slice/system-cockpithttps.slice/" \
                              "cockpit-wsinstance-https@([0-9a-f]{64}).service$"
@@ -100,6 +107,87 @@ get_ws_https_instance (void)
   buf[pmatch[CGROUP_REGEX_MATCH].rm_eo] = '\0';
 
   return buf + pmatch[CGROUP_REGEX_MATCH].rm_so;
+}
+
+/*
+ * returns:
+ * 2 No CA File
+ * 1 validated
+ * 0 invalid
+ * -1 or other negative is an error
+ */
+static int
+cockpit_validateX509 (const char *certificate)
+{
+	X509_STORE         *store = NULL;
+	X509_STORE_CTX  *vrfy_ctx = NULL;
+	int ret;
+
+	const char ca_bundlestr[] = "/etc/cockpit/ca-bundle.pem";
+	char crl_file[30];
+	FILE *crl_ptr;
+	X509_CRL *crl;
+
+	OpenSSL_add_all_algorithms();
+
+	size_t certLen = strlen(certificate);
+	BIO* certBio = BIO_new(BIO_s_mem());
+	BIO_write(certBio, certificate, certLen);
+	X509* certX509 = PEM_read_bio_X509(certBio, NULL, 0, NULL);
+
+	if (!certX509)
+	  {
+		warn ("Could not parse X509 certificate.");
+	    return -1;
+	  }
+
+	// like /etc/cockpit/crl/e5ad35fa.r0 (hash would be the e5ad35fa part)
+	unsigned long hash = X509_issuer_name_hash(certX509);
+
+	if (!(store=X509_STORE_new() ))
+	  {
+		warn ("Error creating X509_STORE_CTX object");
+	    return -1;
+	  }
+
+	vrfy_ctx = X509_STORE_CTX_new();
+
+	ret = X509_STORE_load_locations(store, ca_bundlestr, NULL);
+	if (ret != 1)
+	  {
+		X509_STORE_free(store);
+		warn ("Error loading CA chain file: /etc/cockpit/ca-bundle.pem");
+	    return 2;
+	  }
+
+	sprintf(crl_file, "/etc/cockpit/crl/%08lx.r0", hash);
+	crl_ptr = fopen(crl_file,"r");
+	if(crl_ptr)
+	  {
+		crl = PEM_read_X509_CRL(crl_ptr, NULL,0,NULL);
+		if (crl)
+		{
+          X509_STORE_add_crl(store, crl );
+
+		  // only loading the leaf CRL, so only check that
+          X509_STORE_set_flags(store, X509_V_FLAG_CRL_CHECK);
+		} else {
+	      warn ("Error reading CRL file: %s", crl_file);
+	    }
+	  } else {
+		warn ("Unable to load CRL file: %s", crl_file);
+	  }
+
+	X509_STORE_CTX_init(vrfy_ctx, store, certX509, NULL);
+
+	ret = X509_verify_cert(vrfy_ctx); //1 is good, 0 is bad, <0 is error
+
+	X509_STORE_CTX_free(vrfy_ctx);
+	X509_STORE_free(store);
+	if (crl_ptr)
+	  fclose(crl_ptr);
+
+	return ret;
 }
 
 /**
@@ -201,6 +289,14 @@ https_instance_has_certificate_file (char   *contents,
           warnx ("Certificate file /run/cockpit/tls/%s contains nul characters", https_instance);
           goto out;
         }
+
+      /** for backwards compatibility do not error if the validation file is not present
+       */
+      if (cockpit_validateX509(contents) <  1)
+        {
+          warnx ("Certificate not from a valid issuer in: /etc/cockpit/ca-bundle.pem");
+          goto out;
+        }
     }
 
   result = buf.st_size;
@@ -214,3 +310,4 @@ out:
 
   return result;
 }
+
