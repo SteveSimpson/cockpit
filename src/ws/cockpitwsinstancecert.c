@@ -17,6 +17,7 @@
  * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
  */
 
+
 #ifdef HAVE_CONFIG_H
 #include <config.h>
 #endif
@@ -216,7 +217,8 @@ cockpit_validateX509 (const char *certificate)
  * logged).
  */
 ssize_t
-https_instance_has_certificate_file (char *contents, size_t contents_size)
+https_instance_has_certificate_file (char *contents,
+                                     size_t contents_size)
 {
   const char *https_instance = get_ws_https_instance ();
   int dirfd = -1, filefd = -1;
@@ -239,30 +241,26 @@ https_instance_has_certificate_file (char *contents, size_t contents_size)
   filefd = openat (dirfd, https_instance, O_RDONLY | O_NOFOLLOW);
   if (filefd == -1)
     {
-      warn ("Failed to open certificate file /run/cockpit/tls/%s",
-            https_instance);
+      warn ("Failed to open certificate file /run/cockpit/tls/%s", https_instance);
       goto out;
     }
 
   if (fstat (filefd, &buf) != 0)
     {
-      warn ("Failed to stat certificate file /run/cockpit/tls/%s",
-            https_instance);
+      warn ("Failed to stat certificate file /run/cockpit/tls/%s", https_instance);
       goto out;
     }
 
   if (!S_ISREG (buf.st_mode))
     {
       warnx (
-          "Could not read certificate: /run/cockpit/tls/%s is not a regular file",
-          https_instance);
+          "Could not read certificate: /run/cockpit/tls/%s is not a regular file", https_instance);
       goto out;
     }
 
   if (buf.st_size == 0)
     {
-      warnx ("Could not read certificate: /run/cockpit/tls/%s is empty",
-             https_instance);
+      warnx ("Could not read certificate: /run/cockpit/tls/%s is empty", https_instance);
       goto out;
     }
 
@@ -271,8 +269,7 @@ https_instance_has_certificate_file (char *contents, size_t contents_size)
       /* Strictly less than, since we will add a nul */
       if (!(buf.st_size < contents_size))
         {
-          warnx ("Insufficient space in read buffer for /run/cockpit/tls/%s",
-                 https_instance);
+          warnx ("Insufficient space in read buffer for /run/cockpit/tls/%s", https_instance);
           goto out;
         }
 
@@ -281,8 +278,7 @@ https_instance_has_certificate_file (char *contents, size_t contents_size)
       while (r == -1 && errno == EINTR);
       if (r == -1)
         {
-          warn ("Could not read certificate file /run/cockpit/tls/%s",
-                https_instance);
+          warn ("Could not read certificate file /run/cockpit/tls/%s", https_instance);
           goto out;
         }
       if (r != buf.st_size)
@@ -297,8 +293,7 @@ https_instance_has_certificate_file (char *contents, size_t contents_size)
 
       if (strlen (contents) != buf.st_size)
         {
-          warnx ("Certificate file /run/cockpit/tls/%s contains nul characters",
-                 https_instance);
+          warnx ("Certificate file /run/cockpit/tls/%s contains nul characters", https_instance);
           goto out;
         }
 
@@ -314,7 +309,8 @@ https_instance_has_certificate_file (char *contents, size_t contents_size)
 
   result = buf.st_size;
 
-out: if (filefd != -1)
+out:
+  if (filefd != -1)
     close (filefd);
 
   if (dirfd != -1)
