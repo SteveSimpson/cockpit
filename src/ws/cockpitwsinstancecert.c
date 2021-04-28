@@ -53,7 +53,7 @@
  * looks like 0::/system.slice/system-cockpit\x2dwsinstance\x2dhttps.slice/cockpit-wsinstance-https@123abc.service
  * returns "123abc" instance name (static string)
  */
-static const char *
+static const char*
 get_ws_https_instance (void)
 {
   int r;
@@ -119,75 +119,79 @@ get_ws_https_instance (void)
 static int
 cockpit_validateX509 (const char *certificate)
 {
-	X509_STORE         *store = NULL;
-	X509_STORE_CTX  *vrfy_ctx = NULL;
-	int ret;
+  X509_STORE *store = NULL;
+  X509_STORE_CTX *vrfy_ctx = NULL;
+  int ret;
 
-	const char ca_bundlestr[] = "/etc/cockpit/ca-bundle.pem";
-	char crl_file[30];
-	FILE *crl_ptr;
-	X509_CRL *crl;
+  const char ca_bundlestr[] = "/etc/cockpit/ca-bundle.pem";
+  char crl_file[30];
+  FILE *crl_ptr;
+  X509_CRL *crl;
 
-	OpenSSL_add_all_algorithms();
+  OpenSSL_add_all_algorithms ();
 
-	size_t certLen = strlen(certificate);
-	BIO* certBio = BIO_new(BIO_s_mem());
-	BIO_write(certBio, certificate, certLen);
-	X509* certX509 = PEM_read_bio_X509(certBio, NULL, 0, NULL);
+  size_t certLen = strlen (certificate);
+  BIO *certBio = BIO_new (BIO_s_mem ());
+  BIO_write (certBio, certificate, certLen);
+  X509 *certX509 = PEM_read_bio_X509 (certBio, NULL, 0, NULL);
 
-	if (!certX509)
-	  {
-		warn ("Could not parse X509 certificate.");
-	    return -1;
-	  }
+  if (!certX509)
+    {
+      warn ("Could not parse X509 certificate.");
+      return -1;
+    }
 
-	// like /etc/cockpit/crl/e5ad35fa.r0 (hash would be the e5ad35fa part)
-	unsigned long hash = X509_issuer_name_hash(certX509);
+  // like /etc/cockpit/crl/e5ad35fa.r0 (hash would be the e5ad35fa part)
+  unsigned long hash = X509_issuer_name_hash (certX509);
 
-	if (!(store=X509_STORE_new() ))
-	  {
-		warn ("Error creating X509_STORE_CTX object");
-	    return -1;
-	  }
+  if (!(store = X509_STORE_new ()))
+    {
+      warn ("Error creating X509_STORE_CTX object");
+      return -1;
+    }
 
-	vrfy_ctx = X509_STORE_CTX_new();
+  vrfy_ctx = X509_STORE_CTX_new ();
 
-	ret = X509_STORE_load_locations(store, ca_bundlestr, NULL);
-	if (ret != 1)
-	  {
-		X509_STORE_free(store);
-		warn ("Error loading CA chain file: /etc/cockpit/ca-bundle.pem");
-	    return 2;
-	  }
+  ret = X509_STORE_load_locations (store, ca_bundlestr, NULL);
+  if (ret != 1)
+    {
+      X509_STORE_free (store);
+      warn ("Error loading CA chain file: /etc/cockpit/ca-bundle.pem");
+      return 2;
+    }
 
-	sprintf(crl_file, "/etc/cockpit/crl/%08lx.r0", hash);
-	crl_ptr = fopen(crl_file,"r");
-	if(crl_ptr)
-	  {
-		crl = PEM_read_X509_CRL(crl_ptr, NULL,0,NULL);
-		if (crl)
-		{
-          X509_STORE_add_crl(store, crl );
+  sprintf (crl_file, "/etc/cockpit/crl/%08lx.r0", hash);
+  crl_ptr = fopen (crl_file, "r");
+  if (crl_ptr)
+    {
+      crl = PEM_read_X509_CRL (crl_ptr, NULL, 0, NULL);
+      if (crl)
+        {
+          X509_STORE_add_crl (store, crl);
 
-		  // only loading the leaf CRL, so only check that
-          X509_STORE_set_flags(store, X509_V_FLAG_CRL_CHECK);
-		} else {
-	      warn ("Error reading CRL file: %s", crl_file);
-	    }
-	  } else {
-		warn ("Unable to load CRL file: %s", crl_file);
-	  }
+          // only loading the leaf CRL, so only check that
+          X509_STORE_set_flags (store, X509_V_FLAG_CRL_CHECK);
+        }
+      else
+        {
+          warn ("Error reading CRL file: %s", crl_file);
+        }
+    }
+  else
+    {
+      warn ("Unable to load CRL file: %s", crl_file);
+    }
 
-	X509_STORE_CTX_init(vrfy_ctx, store, certX509, NULL);
+  X509_STORE_CTX_init (vrfy_ctx, store, certX509, NULL);
 
-	ret = X509_verify_cert(vrfy_ctx); //1 is good, 0 is bad, <0 is error
+  ret = X509_verify_cert (vrfy_ctx); //1 is good, 0 is bad, <0 is error
 
-	X509_STORE_CTX_free(vrfy_ctx);
-	X509_STORE_free(store);
-	if (crl_ptr)
-	  fclose(crl_ptr);
+  X509_STORE_CTX_free (vrfy_ctx);
+  X509_STORE_free (store);
+  if (crl_ptr)
+    fclose (crl_ptr);
 
-	return ret;
+  return ret;
 }
 
 /**
@@ -212,8 +216,7 @@ cockpit_validateX509 (const char *certificate)
  * logged).
  */
 ssize_t
-https_instance_has_certificate_file (char   *contents,
-                                     size_t  contents_size)
+https_instance_has_certificate_file (char *contents, size_t contents_size)
 {
   const char *https_instance = get_ws_https_instance ();
   int dirfd = -1, filefd = -1;
@@ -236,25 +239,30 @@ https_instance_has_certificate_file (char   *contents,
   filefd = openat (dirfd, https_instance, O_RDONLY | O_NOFOLLOW);
   if (filefd == -1)
     {
-      warn ("Failed to open certificate file /run/cockpit/tls/%s", https_instance);
+      warn ("Failed to open certificate file /run/cockpit/tls/%s",
+            https_instance);
       goto out;
     }
 
   if (fstat (filefd, &buf) != 0)
     {
-      warn ("Failed to stat certificate file /run/cockpit/tls/%s", https_instance);
+      warn ("Failed to stat certificate file /run/cockpit/tls/%s",
+            https_instance);
       goto out;
     }
 
   if (!S_ISREG (buf.st_mode))
     {
-      warnx ("Could not read certificate: /run/cockpit/tls/%s is not a regular file", https_instance);
+      warnx (
+          "Could not read certificate: /run/cockpit/tls/%s is not a regular file",
+          https_instance);
       goto out;
     }
 
   if (buf.st_size == 0)
     {
-      warnx ("Could not read certificate: /run/cockpit/tls/%s is empty", https_instance);
+      warnx ("Could not read certificate: /run/cockpit/tls/%s is empty",
+             https_instance);
       goto out;
     }
 
@@ -263,7 +271,8 @@ https_instance_has_certificate_file (char   *contents,
       /* Strictly less than, since we will add a nul */
       if (!(buf.st_size < contents_size))
         {
-          warnx ("Insufficient space in read buffer for /run/cockpit/tls/%s", https_instance);
+          warnx ("Insufficient space in read buffer for /run/cockpit/tls/%s",
+                 https_instance);
           goto out;
         }
 
@@ -272,13 +281,15 @@ https_instance_has_certificate_file (char   *contents,
       while (r == -1 && errno == EINTR);
       if (r == -1)
         {
-          warn ("Could not read certificate file /run/cockpit/tls/%s", https_instance);
+          warn ("Could not read certificate file /run/cockpit/tls/%s",
+                https_instance);
           goto out;
         }
       if (r != buf.st_size)
         {
-          warnx ("Read incomplete contents of certificate file /run/cockpit/tls/%s: %zu of %zu bytes",
-                 https_instance, r, (size_t) buf.st_size);
+          warnx (
+              "Read incomplete contents of certificate file /run/cockpit/tls/%s: %zu of %zu bytes",
+              https_instance, r, (size_t) buf.st_size);
           goto out;
         }
 
@@ -286,23 +297,24 @@ https_instance_has_certificate_file (char   *contents,
 
       if (strlen (contents) != buf.st_size)
         {
-          warnx ("Certificate file /run/cockpit/tls/%s contains nul characters", https_instance);
+          warnx ("Certificate file /run/cockpit/tls/%s contains nul characters",
+                 https_instance);
           goto out;
         }
 
       /** for backwards compatibility do not error if the validation file is not present
        */
-      if (cockpit_validateX509(contents) <  1)
+      if (cockpit_validateX509 (contents) < 1)
         {
-          warnx ("Certificate not from a valid issuer in: /etc/cockpit/ca-bundle.pem");
+          warnx (
+              "Certificate not from a valid issuer in: /etc/cockpit/ca-bundle.pem");
           goto out;
         }
     }
 
   result = buf.st_size;
 
-out:
-  if (filefd != -1)
+out: if (filefd != -1)
     close (filefd);
 
   if (dirfd != -1)
