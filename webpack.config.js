@@ -38,9 +38,6 @@ const info = {
         "playground/exception": [
             "playground/exception.js",
         ],
-        "playground/jquery-patterns": [
-            "playground/jquery-patterns.js",
-        ],
         "playground/metrics": [
             "playground/metrics.js",
         ],
@@ -195,7 +192,6 @@ const info = {
         "playground/index.html",
         "playground/exception.html",
         "playground/hammer.gif",
-        "playground/jquery-patterns.html",
         "playground/metrics.html",
         "playground/pkgs.html",
         "playground/plot.html",
@@ -241,7 +237,6 @@ const info = {
 
 process.traceDeprecation = true;
 
-const childProcess = require('child_process');
 const path = require("path");
 const fs = require("fs");
 
@@ -335,22 +330,22 @@ const opensans_fonts = ["Bold", "BoldItalic", "ExtraBold", "ExtraBoldItalic", "I
         { from: path.resolve(nodedir, 'patternfly/dist/fonts/OpenSans-' + name + '-webfont.woff'), to: 'static/fonts/' }
     ));
 
-function get_msggrep_options () {
+function get_translation_reference_patterns () {
     // shell needs all manifest translations for search
     if (section === 'shell/')
-        return ['-N', 'pkg/*/manifest.json'];
+        return ['pkg/.*/manifest.json'];
     if (section === 'static/')
-        return ['-N', 'src/ws/*'];
+        return ['src/ws/.*'];
     return undefined;
 }
 
 const plugins = [
     new IncludedModulesPlugin((section || "") + "included-modules"),
-    new copy(info.files),
+    new copy({ patterns: info.files }),
     new miniCssExtractPlugin({ filename: "[name].css" }),
     new CockpitPoPlugin({
         subdir: section,
-        msggrep_options: get_msggrep_options(),
+        reference_patterns: get_translation_reference_patterns(),
         // login page does not have cockpit.js, but reads window.cockpit_po
         wrapper: (section === 'static/') ? 'window.cockpit_po = PO_DATA;' : undefined,
     }),
@@ -360,11 +355,11 @@ if (eslint)
     plugins.push(new ESLintPlugin({ extensions: ["js", "jsx"] }));
 
 if (section.startsWith('base1'))
-    plugins.push(new copy(base1_fonts));
+    plugins.push(new copy({ patterns: base1_fonts }));
 
 if (section.startsWith('static')) {
-    plugins.push(new copy(redhat_fonts));
-    plugins.push(new copy(opensans_fonts));
+    plugins.push(new copy({ patterns: redhat_fonts }));
+    plugins.push(new copy({ patterns: opensans_fonts }));
 }
 
 /* Fill in the tests properly */
@@ -383,25 +378,8 @@ info.tests.forEach(test => {
 });
 
 const aliases = {
-    "moment": "moment/moment.js",
     "font-awesome": path.resolve(nodedir, 'font-awesome-sass/assets/stylesheets'),
 };
-
-/* HACK: To get around redux warning about reminimizing code */
-if (production)
-    aliases["redux/dist/redux"] = "redux/dist/redux.min.js";
-
-/* check if sassc is available, to avoid unintelligible error messages */
-try {
-    childProcess.execFileSync('sassc', ['--version'], { stdio: ['pipe', 'pipe', 'inherit'] });
-} catch (e) {
-    if (e.code === 'ENOENT') {
-        console.error("ERROR: You need to install the 'sassc' package to build this project.");
-        process.exit(1);
-    } else {
-        throw e;
-    }
-}
 
 module.exports = {
     mode: production ? 'production' : 'development',
@@ -433,7 +411,15 @@ module.exports = {
 
     optimization: {
         minimize: production,
-        minimizer: [new TerserJSPlugin({ extractComments : false }), new CssMinimizerPlugin()],
+        minimizer: [
+           new TerserJSPlugin({ extractComments: false }),
+           new CssMinimizerPlugin({
+               minimizerOptions: {
+                   preset: ['lite']
+               }
+           })
+       ],
+
     },
 
     module: {
@@ -494,19 +480,19 @@ module.exports = {
                         options: {
                             multiple: [
                                 {
-                                    search: /src:url[(]"patternfly-icons-fake-path\/glyphicons-halflings-regular[^}]*/g,
+                                    search: /src: ?url[(]"patternfly-icons-fake-path\/glyphicons-halflings-regular[^}]*/g,
                                     replace: 'font-display:block; src:url("../base1/fonts/glyphicons.woff") format("woff");',
                                 },
                                 {
-                                    search: /src:url[(]"patternfly-fonts-fake-path\/PatternFlyIcons[^}]*/g,
+                                    search: /src: ?url[(]"patternfly-fonts-fake-path\/PatternFlyIcons[^}]*/g,
                                     replace: 'src:url("../base1/fonts/patternfly.woff") format("woff");',
                                 },
                                 {
-                                    search: /src:url[(]"patternfly-fonts-fake-path\/fontawesome[^}]*/,
+                                    search: /src: ?url[(]"patternfly-fonts-fake-path\/fontawesome[^}]*/,
                                     replace: 'font-display:block; src:url("../base1/fonts/fontawesome.woff?v=4.2.0") format("woff");',
                                 },
                                 {
-                                    search: /src:url\("patternfly-icons-fake-path\/pficon[^}]*/g,
+                                    search: /src: ?url\("patternfly-icons-fake-path\/pficon[^}]*/g,
                                     replace: 'src:url("../base1/fonts/patternfly.woff") format("woff");',
                                 },
                                 {
@@ -516,7 +502,23 @@ module.exports = {
                             ]
                         },
                     },
-                    'sassc-loader',
+                    {
+                        loader: 'sass-loader',
+                        options: {
+                            sourceMap: !production,
+                            sassOptions: {
+                                quietDeps: true,
+                                outputStyle: production ? 'compressed' : undefined,
+                                includePaths: [
+                                    // Teach webpack to resolve these references in order to build PF3 scss
+                                    path.resolve(nodedir),
+                                    path.resolve(nodedir, 'font-awesome-sass', 'assets', 'stylesheets'),
+                                    path.resolve(nodedir, 'patternfly', 'dist', 'sass'),
+                                    path.resolve(nodedir, 'bootstrap-sass', 'assets', 'stylesheets'),
+                                ],
+                            },
+                        },
+                    },
                 ]
             },
             {
@@ -535,7 +537,7 @@ module.exports = {
                         options: {
                             multiple: [
                                 {
-                                    search: /src:url\("patternfly-icons-fake-path\/pficon[^}]*/g,
+                                    search: /src: ?url\("patternfly-icons-fake-path\/pficon[^}]*/g,
                                     replace: "src:url('fonts/patternfly.woff')format('woff');",
                                 },
                                 {
@@ -545,7 +547,16 @@ module.exports = {
                             ]
                         },
                     },
-                    'sassc-loader',
+                    {
+                        loader: 'sass-loader',
+                        options: {
+                            sourceMap: !production,
+                            sassOptions: {
+                                quietDeps: true,
+                                outputStyle: production ? 'compressed' : undefined,
+                            },
+                        },
+                    },
                 ]
             },
             {
@@ -560,7 +571,16 @@ module.exports = {
                             url: false
                         }
                     },
-                    'sassc-loader',
+                    {
+                        loader: 'sass-loader',
+                        options: {
+                            sourceMap: !production,
+                            sassOptions: {
+                                quietDeps: true,
+                                outputStyle: production ? 'compressed' : undefined,
+                            },
+                        },
+                    },
                 ]
             },
             {

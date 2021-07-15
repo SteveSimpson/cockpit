@@ -21,25 +21,100 @@ import {
     DescriptionList,
     DescriptionListTerm,
     DescriptionListGroup,
-    DescriptionListDescription
+    DescriptionListDescription,
+    Flex, FlexItem,
 } from "@patternfly/react-core";
 import cockpit from "cockpit";
 import { dialog_open, PassInput } from "./dialog.jsx";
 import { array_find, encode_filename, decode_filename } from "./utils.js";
 
 import React from "react";
-import { StorageButton, StorageLink } from "./storage-controls.jsx";
+import { StorageLink } from "./storage-controls.jsx";
 import { crypto_options_dialog_fields, crypto_options_dialog_options } from "./format-dialog.jsx";
+
+import * as python from "python.js";
+import luksmeta_monitor_hack_py from "raw-loader!./luksmeta-monitor-hack.py";
+import * as timeformat from "timeformat.js";
 
 import { CryptoKeyslots } from "./crypto-keyslots.jsx";
 
 const _ = cockpit.gettext;
 
+function parse_tag_mtime(tag) {
+    if (tag && tag.indexOf("1:") == 0) {
+        try {
+            const parts = tag.split("-")[1].split(".");
+            // s:ns → ms
+            const mtime = parseInt(parts[0]) * 1000 + parseInt(parts[1]) * 1e-6;
+            return cockpit.format(_("Last modified: $0"), timeformat.dateTime(mtime));
+        } catch {
+            return null;
+        }
+    } else
+        return null;
+}
+
 export class CryptoTab extends React.Component {
+    constructor() {
+        super();
+        // Initialize for LUKSv1 and set max_slots to 8.
+        this.state = {
+            luks_version: 1, slots: null, slot_error: null, max_slots: 8,
+            stored_passphrase_mtime: 0,
+        };
+    }
+
+    monitor_slots(block) {
+        // HACK - we only need this until UDisks2 has a Encrypted.Slots property or similar.
+        if (block != this.monitored_block) {
+            if (this.monitored_block)
+                this.monitor_channel.close();
+            this.monitored_block = block;
+            if (block) {
+                var dev = decode_filename(block.Device);
+                this.monitor_channel = python.spawn(luksmeta_monitor_hack_py, [dev], { superuser: true });
+                var buf = "";
+                this.monitor_channel.stream(output => {
+                    var lines;
+                    buf += output;
+                    lines = buf.split("\n");
+                    buf = lines[lines.length - 1];
+                    if (lines.length >= 2) {
+                        const data = JSON.parse(lines[lines.length - 2]);
+                        this.setState({ slots: data.slots, luks_version: data.version, max_slots: data.max_slots });
+                    }
+                });
+                this.monitor_channel.fail(err => {
+                    this.setState({ slots: [], slot_error: err });
+                });
+            }
+        }
+    }
+
+    monitor_path_mtime(path) {
+        if (path != this.monitored_path) {
+            if (this.monitored_file)
+                this.monitored_file.close();
+            this.monitored_path = path;
+            if (path) {
+                this.monitored_file = cockpit.file(path, { superuser: true });
+                this.monitored_file.watch((_, tag) => this.setState({ stored_passphrase_mtime: parse_tag_mtime(tag) }),
+                                          { read: false });
+            }
+        }
+    }
+
+    componentWillUnmount() {
+        this.monitor_slots(null);
+        this.monitor_path_mtime(null);
+    }
+
     render() {
         var self = this;
         var client = self.props.client;
         var block = self.props.block;
+
+        this.monitor_slots(block);
 
         function edit_config(modify) {
             var old_config, new_config;
@@ -95,7 +170,7 @@ export class CryptoTab extends React.Component {
             });
         }
 
-        var old_config, old_options;
+        var old_config, old_options, passphrase_path;
 
         old_config = array_find(block.Configuration, function (c) { return c[0] == "crypttab" });
         if (old_config) {
@@ -103,7 +178,10 @@ export class CryptoTab extends React.Component {
                     .split(",")
                     .filter(function (s) { return s.indexOf("x-parent") !== 0 })
                     .join(","));
+            passphrase_path = decode_filename(old_config[1]["passphrase-path"].v);
         }
+
+        this.monitor_path_mtime(passphrase_path);
 
         function edit_options() {
             edit_config(function (config, commit) {
@@ -125,27 +203,40 @@ export class CryptoTab extends React.Component {
             });
         }
 
-        // See format-dialog.jsx above for why we don't offer editing
-        // crypttab for the old UDisks2
-
         return (
             <div>
-                <DescriptionList isHorizontal>
+                <DescriptionList className="pf-m-horizontal-on-sm">
+                    { !this.state.slot_error &&
+                    <DescriptionListGroup>
+                        <DescriptionListTerm>{_("Encryption type")}</DescriptionListTerm>
+                        <DescriptionListDescription>
+                            { "LUKS" + this.state.luks_version }
+                        </DescriptionListDescription>
+                    </DescriptionListGroup>
+                    }
                     <DescriptionListGroup>
                         <DescriptionListTerm>{_("Stored passphrase")}</DescriptionListTerm>
                         <DescriptionListDescription>
-                            <StorageButton onClick={edit_stored_passphrase}>{_("Edit")}</StorageButton>
+                            <Flex>
+                                <FlexItem>{ passphrase_path ? this.state.stored_passphrase_mtime || _("yes") : _("none") }</FlexItem>
+                                <FlexItem><StorageLink onClick={edit_stored_passphrase}>{_("edit")}</StorageLink></FlexItem>
+                            </Flex>
                         </DescriptionListDescription>
                     </DescriptionListGroup>
                     <DescriptionListGroup>
                         <DescriptionListTerm>{_("Options")}</DescriptionListTerm>
                         <DescriptionListDescription>
-                            <StorageLink onClick={edit_options}>{old_options || _("(none)")}</StorageLink>
+                            <Flex>
+                                <FlexItem>{ old_options || _("none") }</FlexItem>
+                                <FlexItem><StorageLink onClick={edit_options}>{_("edit")}</StorageLink></FlexItem>
+                            </Flex>
                         </DescriptionListDescription>
                     </DescriptionListGroup>
                 </DescriptionList>
                 <br />
-                <CryptoKeyslots client={client} block={block} />
+                <CryptoKeyslots client={client} block={block}
+                                slots={this.state.slots} slot_error={this.state.slot_error}
+                                max_slots={this.state.max_slots} />
             </div>
         );
     }

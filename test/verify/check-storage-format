@@ -37,14 +37,14 @@ class TestStorageFormat(StorageCase):
         b.click('#drives .sidepanel-row:contains("DISK1")')
         b.wait_visible('#storage-detail')
 
-        self.content_head_action(1, "Format")
+        self.content_row_action(1, "Format")
         self.dialog_wait_open()
         self.dialog_set_val("type", "xfs")
         self.dialog_set_val("mount_point", "/foo")
         self.dialog_set_val("mount_options.auto", False)
         self.dialog_apply()
 
-        b.wait_in_text(".pf-c-modal-box__footer > div.pf-m-danger:nth-child(1)", "Error creating file system")
+        b.wait_in_text("#dialog", "Error creating file system")
 
     def testFormatTypes(self):
         m = self.machine
@@ -59,7 +59,7 @@ class TestStorageFormat(StorageCase):
 
         def check_type(type, label_limit, head_action=False):
             if head_action:
-                self.content_head_action(1, "Format")
+                self.content_row_action(1, "Format")
             else:
                 self.content_dropdown_action(1, "Format")
             self.dialog_wait_open()
@@ -105,7 +105,7 @@ class TestStorageFormat(StorageCase):
         b.click("#others .sidepanel-row:contains('/dev/mapper/superslow')")
         b.wait_visible('#storage-detail')
 
-        self.content_head_action(1, "Format")
+        self.content_row_action(1, "Format")
         self.dialog_wait_open()
         self.dialog_set_val("mount_point", "/foo")
         self.dialog_apply()
@@ -114,9 +114,9 @@ class TestStorageFormat(StorageCase):
         self.dialog_wait_close()
         self.content_row_wait_in_col(1, 1, "Unrecognized data")
 
-        self.content_head_action(1, "Format")
+        self.content_row_action(1, "Format")
         self.dialog_wait_open()
-        self.dialog_set_val("erase", "zero")
+        self.dialog_set_val("erase.on", True)
         self.dialog_set_val("mount_point", "/foo")
         self.dialog_apply()
         b.wait_in_text("footer", "Erasing /dev/mapper/superslow")

@@ -19,32 +19,20 @@
 @import "../lib/page.scss";
 @import "../../node_modules/@patternfly/patternfly/components/Card/card.css";
 @import "../lib/ct-card.scss";
+@import "@patternfly/patternfly/utilities/Flex/flex.scss";
+@import "@patternfly/patternfly/utilities/Text/text.scss";
 
 #storage .pf-c-card {
     @extend .ct-card;
-}
-
-#storage {
-    overflow: auto;
-}
-
-.pf-c-page__main {
-    overflow: visible;
 }
 
 #storage .pf-l-gallery {
     --pf-l-gallery--GridTemplateColumns: 1fr;
 }
 
-#main-storage.pf-c-page,
 #storage-detail .pf-c-page__main-section,
 #storage-detail .pf-c-page__main-nav {
-    padding: var(--pf-global--gutter);
     overflow: auto;
-}
-
-#main-storage > .pf-c-page__main {
-    padding-bottom: var(--pf-global--spacer--md);
 }
 
 #storage .create-storage {
@@ -76,20 +64,6 @@
     overflow: hidden;
     text-overflow: ellipsis;
     vertical-align: top;
-}
-
-#storage_raids .row span,
-#storage_vgs .row span,
-#storage_drives .row span {
-    padding: 0;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-
-#storage_raids .row span.raid-size,
-#storage_vgs .row span.vg-size {
-    text-align: right;
 }
 
 .dialog-select-row-table {
@@ -142,108 +116,8 @@
     padding-right: 0.75em;
 }
 
-.arming-zone .needs-arming {
-    display: none;
-}
-
-.arming-zone.armed .needs-arming {
-    display: block;
-}
-
-/* Slider
- */
-
-.slider {
-    display: block;
-    margin: 10px 10px;
-    height: 5px;
-    white-space: nowrap;
-    font-size: 0px;
-    background-color: #ededed;
-    box-shadow: inset 0 0 1px rgba(0,0,0,0.5);
-    cursor: pointer;
-    user-select: none;
-    -moz-user-select: none;
-    -webkit-user-select: none;
-}
-
-.slider-warning {
-    background-color: #d4a096;
-}
-
-.slider-bar {
-    position: relative;
-    height: 5px;
-}
-
-.slider > .slider-bar > .slider-bar {
-    border-right: 3px solid white;
-    height: 5px;
-    position: relative;
-}
-
-.slider > .slider-bar > .slider-bar {
-    display: inline-block;
-}
-
-.slider > div:first-child {
-    float: left;
-    background-color: var(--ct-color-link);
-}
-
-.slider-disabled > div:first-child {
-    cursor: auto;
-    background-color: #e7e7e7;
-}
-
-.slider-thumb {
-    position: absolute;
-    border-radius: 9px;
-    background-color: var(--ct-color-link);
-    width: 18px;
-    height: 18px;
-    top: -6px;
-    right: -9px;
-    content: '.';
-    cursor: pointer;
-    border: 1px solid #006e9c;
-    background-image: linear-gradient(to bottom,var(--ct-color-link) 0%,var(--ct-color-link) 100%);
-    z-index: 1;
-}
-
-.slider-disabled .slider-thumb {
-    background-color: #e7e7e7;
-    border: 1px solid #d7d7d7;
-    cursor: auto;
-}
-
-.size-slider td:nth-child(1) {
-    width: 100%;
-    padding: 0px;
-}
-
-.size-slider td {
-    padding: 0px;
-}
-
-.size-slider .size-text {
-    display: inline;
-    width: 6em;
-    text-align: right;
-    margin: 2px;
-}
-
-.size-slider .size-unit {
-    width: 5em !important;
-}
-
 td.storage-icon {
     width: 48px;
-}
-
-span.rate-gap {
-    display: inline-block;
-    width: 1em;
 }
 
 div.progress {
@@ -253,6 +127,10 @@ div.progress {
 
 #detail-header div.progress {
     min-width: 250px;
+}
+
+#storage-detail .ct-table {
+    border-top: var(--pf-global--BorderWidth--sm) solid var(--pf-global--BorderColor--100);
 }
 
 td.usage-text {
@@ -280,67 +158,13 @@ td.job-action {
     height: 180px;
 }
 
-.action-dropdown-menu {
-    right: 0px;
-    left: auto;
-    min-width: 0;
-    text-align: left;
-}
-
 .content-nav-item-warning:first-child {
     padding-right: var(--pf-global--spacer--sm);
 }
 
-.content-item {
-    width: 100%;
-}
-
-.content-item table {
-    width: 100%;
-}
-
 .content-action {
     text-align: right;
-}
-
-table.mdraid-item {
-    width: 100%;
-}
-
-td.mdraid-slot {
-    width: 20px;
-    text-align: center;
-}
-
-td.mdraid-states {
-    width: 100px;
-    text-align: right;
-}
-
-td.mdraid-states .state-danger {
-    color: red;
-}
-
-td.mdraid-action {
-    text-align: right;
-    width: 10em;
-}
-
-table.vgroup-item {
-    width: 100%;
-}
-
-td.vgroup-action {
-    text-align: right;
-}
-
-.dialog-arrow {
-    color: black;
-    cursor: pointer;
-}
-
-.dialog-arrow .fa {
-    width: 1em;
+    width: 1% !important;
 }
 
 .dialog-item-tooltip {
@@ -349,49 +173,31 @@ td.vgroup-action {
     white-space: nowrap;
 }
 
-.ct-storage-checkbox {
-    > .pf-c-check {
-        width: 100%;
-    }
-    display: flex;
-    flex-direction: row;
-    column-gap: var(--pf-global--spacer--sm);
-}
-
 .modal-footer-teardown {
     padding-bottom: var(--pf-global--spacer--md);
     text-align: left;
 }
 
-.content-level-1 {
-    padding-left: 30px;
+tr[class*=content-level-] {
+    --multiplier: 0;
+    --offset: calc(var(--pf-global--spacer--lg) * var(--multiplier));
+
+    // Move the button over
+    > .pf-c-table__toggle > button {
+        position: relative;
+        left: var(--offset);
+    }
+
+    // Add space for the button and offset
+    > .pf-c-table__toggle + td {
+        padding-left: var(--offset);
+    }
 }
-.content-level-2 {
-    padding-left: 60px;
-}
-.content-level-3 {
-    padding-left: 90px;
-}
-.content-level-4 {
-    padding-left: 120px;
-}
-.content-level-5 {
-    padding-left: 150px;
-}
-.content-level-6 {
-    padding-left: 180px;
-}
-.content-level-7 {
-    padding-left: 210px;
-}
-.content-level-8 {
-    padding-left: 240px;
-}
-.content-level-9 {
-    padding-left: 270px;
-}
-.content-level-10 {
-    padding-left: 300px;
+
+@for $i from 1 through 10 {
+    tr.content-level-#{$i} {
+        --multiplier: #{$i};
+    }
 }
 
 .tab-actions {
@@ -492,11 +298,11 @@ td.storage-action {
 
 .sigkey-hash {
     font-family: monospace;
-    font-size: 200%;
+    font-size: 140%;
 }
 
 .inline-pre {
-    display: inline;
+    display: inline-block;
     padding: 4px;
 }
 
@@ -538,40 +344,20 @@ td.storage-action {
     margin-bottom: 2ex;
 }
 
-.size-sliderx {
-    display: flex;
-    flex-direction: row;
-    align-items: center;
-}
-
-.size-sliderx .slider {
-    flex: 1;
-}
-
-.size-sliderx .size-text {
-    display: inline;
-    width: 6em;
-    text-align: right;
-    margin: 2px;
-}
-
-.size-sliderx .size-unit {
-    width: 5em !important;
-}
-
 .ct-form-box {
     margin-bottom: 1em;
+}
+
+// This is needs to avoid showing scrollbar in dialog
+.size-slider {
+    padding-bottom: var(--pf-global--spacer--xs);
 }
 
 /* Overview side panels */
 
 .sidepanel-row {
     padding: var(--pf-global--spacer--sm) var(--pf-global--spacer--lg);
-    border-bottom: var(--pf-global--BorderWidth--sm) solid var(--pf-global--BorderColor--100);
-}
-
-.sidepanel-row:last-child {
-    border-bottom: none;
+    border-top: var(--pf-global--BorderWidth--sm) solid var(--pf-global--BorderColor--100);
 }
 
 .sidepanel-row.pf-c-empty-state {
@@ -581,11 +367,12 @@ td.storage-action {
 }
 
 .sidepanel-row:not(.pf-c-empty-state):hover {
-    background-color: var(--ct-color-link-hover-bg);
+    color: var(--ct-color-list-hover-text);
+    cursor: pointer;
 }
 
 .sidepanel-row-name {
-    font-size: var(--pf-global--FontSize--md);
+    font-size: var(--pf-global--FontSize--sm);
 }
 
 .sidepanel-row-info {
@@ -610,4 +397,9 @@ td.storage-action {
 
 .crypto-keyslots-list {
     border: none;
+}
+
+// So that "Stored passphrase" fits
+.pf-c-description-list {
+    --pf-c-description-list--m-horizontal__term--width: minmax(0, 18ch);
 }

@@ -19,6 +19,7 @@
 
 import React from 'react';
 import { Button } from '@patternfly/react-core';
+import { ExternalLinkAltIcon } from '@patternfly/react-icons';
 
 import cockpit from "cockpit";
 import * as service from "service.js";
@@ -132,7 +133,7 @@ export class InsightsStatus extends React.Component {
 
         let url;
         if (this.state.id)
-            url = "https://cloud.redhat.com/insights/inventory/" + this.state.id + "/insights";
+            url = "https://cloud.redhat.com/insights/inventory/" + this.state.id;
         else
             url = "https://cloud.redhat.com/insights";
 
@@ -182,7 +183,12 @@ export class InsightsStatus extends React.Component {
         return (
             <li className="system-health-insights">
                 {icon}
-                <Button variant="link" component='a' href={url}>{_("Insights: ")} {text}</Button>
+                <Button isInline variant="link" component='a' href={url}
+                        target="_blank" rel="noopener noreferrer"
+                        icon={<ExternalLinkAltIcon />}
+                        iconPosition="right">
+                    {_("Insights: ")} {text}
+                </Button>
             </li>);
     }
 }

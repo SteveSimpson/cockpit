@@ -18,12 +18,12 @@
  */
 
 import React from "react";
-import moment from "moment";
 import PropTypes from "prop-types";
 import {
     Alert, Button,
     DescriptionList, DescriptionListTerm, DescriptionListGroup, DescriptionListDescription,
     Dropdown, DropdownItem, DropdownSeparator, KebabToggle,
+    ExpandableSection,
     Tooltip, TooltipPosition,
     Card, CardBody, CardTitle, Text, TextVariants,
     Modal, Switch
@@ -31,10 +31,12 @@ import {
 
 import cockpit from "cockpit";
 import { systemd_client, SD_MANAGER, SD_OBJ } from "./services.jsx";
+import * as timeformat from "timeformat";
 
 import './service-details.scss';
 
 const _ = cockpit.gettext;
+const METRICS_POLL_DELAY = 30000; // 30s
 
 /*
  * React template for showing basic dialog for confirming action
@@ -138,7 +140,7 @@ class ServiceActions extends React.Component {
 
             if (actions.length > 0) {
                 actions.push(
-                    <DropdownSeparator key="divider" divider />
+                    <DropdownSeparator key="divider" />
                 );
             }
 
@@ -170,6 +172,7 @@ class ServiceActions extends React.Component {
                           isOpen={this.state.isActionOpen}
                           isPlain
                           onSelect={() => this.setState({ isActionOpen: !this.state.isActionOpen })}
+                          position='right'
                           dropdownItems={actions} />
             </>
         );
@@ -208,20 +211,63 @@ export class ServiceDetails extends React.Component {
             waitsFileAction: false,
             note: "",
             error: "",
+            unit_properties: {},
         };
 
         this.onOnOffSwitch = this.onOnOffSwitch.bind(this);
         this.unitAction = this.unitAction.bind(this);
         this.unitFileAction = this.unitFileAction.bind(this);
+
+        this.unitType = props.unit.Id.split('.').slice(-1)[0];
+        this.unitTypeCapitalized = this.unitType.charAt(0).toUpperCase() + this.unitType.slice(1);
+        this.doMemoryCurrentPolling = this.doMemoryCurrentPolling.bind(this);
+
+        // MemoryCurrent property does not emit a changed signal - do polling for this property
+        if (props.unit.ActiveState == "active") {
+            this.doMemoryCurrentPolling();
+            this.interval = setInterval(this.doMemoryCurrentPolling, METRICS_POLL_DELAY);
+        }
     }
 
-    shouldComponentUpdate(nextProps, nextState) {
-        // Don't update when only actions resolved, wait until API triggers some redrawing
-        if ((nextState.waitsAction === false && this.state.waitsAction === true) ||
-            (nextState.waitsFileAction === false && this.state.waitsFileAction === true) ||
-            nextProps.loadingUnits)
-            return false;
-        return true;
+    componentDidUpdate(prevProps) {
+        // If unit became active start property polling and if got inactive stop
+        if (this.props.unit.ActiveState === 'active' && !this.interval) {
+            this.doMemoryCurrentPolling();
+            this.interval = setInterval(this.doMemoryCurrentPolling, METRICS_POLL_DELAY);
+        }
+        if (this.props.unit.ActiveState === 'inactive' && this.interval) {
+            this.doMemoryCurrentPolling();
+            clearInterval(this.interval);
+        }
+    }
+
+    componentWillUnmount() {
+        if (this.interval)
+            clearInterval(this.interval);
+    }
+
+    static getDerivedStateFromProps(nextProps, prevState) {
+        return {
+            waitsAction: nextProps.loadingUnits,
+            waitsFileAction: nextProps.loadingUnits,
+        };
+    }
+
+    doMemoryCurrentPolling() {
+        systemd_client.call(this.props.unit.path,
+                            "org.freedesktop.DBus.Properties", "Get",
+                            ["org.freedesktop.systemd1." + this.unitTypeCapitalized, 'MemoryCurrent'])
+                .then(result => {
+                    this.addUnitProperties(
+                        "MemoryCurrent",
+                        result[0] && result[0].v > 0 ? result[0].v : null,
+                    );
+                }, ex => console.log(ex.message));
+    }
+
+    addUnitProperties(prop, value) {
+        if (prop == "MemoryCurrent" && this.state.unit_properties.MemoryCurrent !== value)
+            this.setState({ unit_properties: Object.assign(this.state.unit_properties, { [prop]: value }) });
     }
 
     onOnOffSwitch() {
@@ -243,8 +289,7 @@ export class ServiceDetails extends React.Component {
             extra_args = ["fail"];
         this.setState({ waitsAction: true });
         systemd_client.call(SD_OBJ, SD_MANAGER, method, [this.props.unit.Names[0]].concat(extra_args))
-                .catch(error => this.setState({ error: error.toString() }))
-                .finally(() => this.setState({ waitsAction: false }));
+                .catch(error => this.setState({ error: error.toString(), waitsAction: false }));
     }
 
     unitFileAction(method, force) {
@@ -259,8 +304,7 @@ export class ServiceDetails extends React.Component {
                     /* Executing daemon reload after file operations is necessary -
                      * see https://github.com/systemd/systemd/blob/main/src/systemctl/systemctl.c [enable_unit function]
                      */
-                    systemd_client.call(SD_OBJ, SD_MANAGER, "Reload", null)
-                            .then(() => this.setState({ waitsFileAction: false }));
+                    systemd_client.call(SD_OBJ, SD_MANAGER, "Reload", null);
                 })
                 .catch(error => {
                     this.setState({
@@ -276,6 +320,7 @@ export class ServiceDetails extends React.Component {
         const isStatic = this.props.unit.UnitFileState !== "disabled" && !enabled;
         const failed = this.props.unit.ActiveState === "failed";
         const masked = this.props.unit.LoadState === "masked";
+        const unit = this.state.unit_properties;
 
         let status = [];
 
@@ -316,7 +361,7 @@ export class ServiceDetails extends React.Component {
                     <div key="running" className="status-running">
                         <span className="pficon pficon-on-running status-icon" />
                         <span className="status">{ _("Running") }</span>
-                        <span className="side-note font-xs">{ _("Active since ") + moment(this.props.unit.ActiveEnterTimestamp / 1000).format('LLL') }</span>
+                        <span className="side-note font-xs">{ _("Active since ") + timeformat.dateTime(this.props.unit.ActiveEnterTimestamp / 1000) }</span>
                     </div>
                 );
             } else {
@@ -365,6 +410,15 @@ export class ServiceDetails extends React.Component {
             );
         }
 
+        if (this.props.unit.NextRunTime || this.props.unit.LastTriggerTime) {
+            status.push(
+                <div className="service-unit-triggers">
+                    {this.props.unit.NextRunTime && <div className="service-unit-next-trigger">{cockpit.format("Next run: $0", this.props.unit.NextRunTime)}</div>}
+                    {this.props.unit.LastTriggerTime && <div className="service-unit-last-trigger">{cockpit.format("Last trigger: $0", this.props.unit.LastTriggerTime)}</div>}
+                </div>
+            );
+        }
+
         /* If there is some ongoing action just show spinner */
         if (this.state.waitsAction || this.state.waitsFileAction) {
             status = [
@@ -378,6 +432,13 @@ export class ServiceDetails extends React.Component {
         const tooltipMessage = enabled ? _("Stop and disable") : _("Start and enable");
         const hasLoadError = this.props.unit.LoadState !== "loaded" && this.props.unit.LoadState !== "masked";
         const loadError = this.props.unit.LoadError ? this.props.unit.LoadError[1] : null;
+
+        // These are relevant for socket and timer activated services
+        const triggerRelationships = [
+            { Name: _("Triggers"), Units: this.props.unit.Triggers },
+            { Name: _("Triggered by"), Units: this.props.unit.TriggeredBy },
+        ];
+
         const relationships = [
             { Name: _("Requires"), Units: this.props.unit.Requires },
             { Name: _("Requisite"), Units: this.props.unit.Requisite },
@@ -394,12 +455,28 @@ export class ServiceDetails extends React.Component {
             { Name: _("Before"), Units: this.props.unit.Before },
             { Name: _("After"), Units: this.props.unit.After },
             { Name: _("On failure"), Units: this.props.unit.OnFailure },
-            { Name: _("Triggers"), Units: this.props.unit.Triggers },
-            { Name: _("Triggered by"), Units: this.props.unit.TriggeredBy },
             { Name: _("Propagates reload to"), Units: this.props.unit.PropagatesReloadTo },
             { Name: _("Reload propagated from"), Units: this.props.unit.ReloadPropagatedFrom },
             { Name: _("Joins namespace of"), Units: this.props.unit.JoinsNamespaceOf }
         ];
+
+        const relationshipsToList = rels => {
+            return rels.filter(rel => rel.Units && rel.Units.length > 0)
+                    .map(rel =>
+                        <DescriptionListGroup key={rel.Name}>
+                            <DescriptionListTerm>{rel.Name}</DescriptionListTerm>
+                            <DescriptionListDescription id={rel.Name.split(" ").join("")}>
+                                <ul className="comma-list">
+                                    {rel.Units.map(unit => <li key={unit}><Button isInline variant="link" component="a" href={"#/" + unit} isDisabled={!this.props.isValid(unit)}>{unit}</Button></li>)}
+                                </ul>
+                            </DescriptionListDescription>
+                        </DescriptionListGroup>
+                    );
+        };
+
+        const triggerRelationshipsList = relationshipsToList(triggerRelationships);
+
+        const extraRelationshipsList = relationshipsToList(relationships);
 
         const conditions = this.props.unit.Conditions;
         const notMetConditions = [];
@@ -430,6 +507,7 @@ export class ServiceDetails extends React.Component {
                                         <Tooltip id="switch-unit-state" content={tooltipMessage} position={TooltipPosition.right}>
                                             <span>
                                                 <Switch isChecked={enabled}
+                                                        aria-label={tooltipMessage}
                                                         isDisabled={this.state.waitsAction || this.state.waitsFileAction}
                                                         onChange={this.onOnOffSwitch} />
                                             </span>
@@ -440,40 +518,43 @@ export class ServiceDetails extends React.Component {
                             }
                         </CardTitle>
                         <CardBody>
-                            <DescriptionList>
+                            <DescriptionList isHorizontal>
                                 <DescriptionListGroup>
                                     <DescriptionListTerm>{ _("Status") }</DescriptionListTerm>
                                     <DescriptionListDescription id="statuses">
                                         { status }
                                     </DescriptionListDescription>
                                 </DescriptionListGroup>
-                                <hr />
                                 <DescriptionListGroup>
                                     <DescriptionListTerm>{ _("Path") }</DescriptionListTerm>
                                     <DescriptionListDescription id="path">{this.props.unit.FragmentPath}</DescriptionListDescription>
                                 </DescriptionListGroup>
-                                <hr />
+                                {unit.MemoryCurrent ? <DescriptionListGroup>
+                                    <DescriptionListTerm>{ _("Memory") }</DescriptionListTerm>
+                                    <DescriptionListDescription id="memory">{cockpit.format_bytes(unit.MemoryCurrent, 1024)}</DescriptionListDescription>
+                                </DescriptionListGroup> : null}
+                                {this.props.unit.Listen && this.props.unit.Listen.length && <DescriptionListGroup>
+                                    <DescriptionListTerm>{ _("Listen") }</DescriptionListTerm>
+                                    <DescriptionListDescription id="listen">
+                                        {cockpit.format("$0 ($1)", this.props.unit.Listen[0][1], this.props.unit.Listen[0][0])}
+                                    </DescriptionListDescription>
+                                </DescriptionListGroup>}
                                 { notMetConditions.length > 0 &&
                                     <DescriptionListGroup>
                                         <DescriptionListTerm className="failed">{ _("Condition failed") }</DescriptionListTerm>
                                         <DescriptionListDescription id="condition">
-                                            {notMetConditions.map(cond => <div key={cond.split(' ').join('')}>{cond}</div>)}
+                                            {notMetConditions.map(cond => <div key={cond}>{cond}</div>)}
                                         </DescriptionListDescription>
                                     </DescriptionListGroup>
                                 }
-                                <hr />
-                                {relationships.map(rel =>
-                                    rel.Units && rel.Units.length > 0 &&
-                                        <DescriptionListGroup key={rel.Name.split().join("")}>
-                                            <DescriptionListTerm>{rel.Name}</DescriptionListTerm>
-                                            <DescriptionListDescription id={rel.Name.split(" ").join("")}>
-                                                <ul className="comma-list">
-                                                    {rel.Units.map(unit => <li key={unit}><a href={"#/" + unit} className={this.props.isValid(unit) ? "" : "disabled"}>{unit}</a></li>)}
-                                                </ul>
-                                            </DescriptionListDescription>
-                                        </DescriptionListGroup>
-                                )}
+                                {triggerRelationshipsList}
                             </DescriptionList>
+                            {extraRelationshipsList.length
+                                ? <ExpandableSection id="service-details-show-relationships" toggleText={triggerRelationshipsList.length ? _("Show more relationships") : _("Show relationships")}>
+                                    <DescriptionList isHorizontal>
+                                        {extraRelationshipsList}
+                                    </DescriptionList>
+                                </ExpandableSection> : null}
                         </CardBody>
                     </>
                 }

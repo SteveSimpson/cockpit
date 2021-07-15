@@ -19,13 +19,14 @@
 
 import cockpit from 'cockpit';
 import React, { useState, useEffect } from 'react';
-import moment from "moment";
 import { superuser } from "superuser";
+import { apply_modal_dialog } from "cockpit-components-dialog.jsx";
 
 import {
     Button, Checkbox,
     Card, CardBody, CardHeader, CardTitle, CardActions,
     EmptyState, EmptyStateVariant, EmptyStateIcon, EmptyStateSecondaryActions,
+    Flex,
     Page, PageSection,
     Gallery, Text, TextVariants, Breadcrumb, BreadcrumbItem,
     Form, FormGroup, TextInput,
@@ -38,6 +39,7 @@ import { account_expiration_dialog, password_expiration_dialog } from "./expirat
 import { set_password_dialog, reset_password_dialog } from "./password-dialogs.js";
 import { AccountRoles } from "./account-roles.js";
 import { AuthorizedKeys } from "./authorized-keys-panel.js";
+import * as timeformat from "timeformat.js";
 
 const _ = cockpit.gettext;
 
@@ -99,14 +101,14 @@ function get_expire(name) {
                 } else if (fields[1].indexOf("password must be changed") === 0) {
                     password_expiration = _("Password must be changed");
                 } else {
-                    password_expiration = cockpit.format(_("Require password change on $0"), moment(fields[1]).format('LL'));
+                    password_expiration = cockpit.format(_("Require password change on $0"), timeformat.date(new Date(fields[1])));
                 }
             } else if (fields[0] && fields[0].indexOf("Account expires") === 0) {
                 if (fields[1].indexOf("never") === 0) {
-                    account_expiration = _("Never lock account");
+                    account_expiration = _("Never expire account");
                 } else {
                     account_date = new Date(fields[1] + " 12:00:00 UTC");
-                    account_expiration = cockpit.format(_("Lock account on $0"), moment(fields[1]).format('LL'));
+                    account_expiration = cockpit.format(_("Expire account on $0"), timeformat.date(new Date(fields[1])));
                 }
             } else if (fields[0] && fields[0].indexOf("Maximum number of days between password change") === 0) {
                 password_days = fields[1];
@@ -247,7 +249,7 @@ export function AccountDetails({ accounts, groups, shadow, current_user, user })
     else if (!details.logged.last)
         last_login = _("Never");
     else
-        last_login = moment(details.logged.last).format('LLL');
+        last_login = timeformat.dateTime(new Date(details.logged.last));
 
     return (
         <Page groupProps={{ sticky: 'top' }}
@@ -278,7 +280,7 @@ export function AccountDetails({ accounts, groups, shadow, current_user, user })
                             }
                         </CardHeader>
                         <CardBody>
-                            <Form isHorizontal>
+                            <Form isHorizontal onSubmit={apply_modal_dialog}>
                                 <FormGroup fieldId="account-real-name" hasNoPaddingTop={!superuser.allowed} label={_("Full name")}>
                                     { superuser.allowed
                                         ? <TextInput id="account-real-name"
@@ -309,7 +311,7 @@ export function AccountDetails({ accounts, groups, shadow, current_user, user })
                                 <FormGroup fieldId="account-last-login" hasNoPaddingTop label={_("Last login")}>
                                     <output id="account-last-login">{last_login}</output>
                                 </FormGroup>
-                                <FormGroup fieldId="account-locked" label={_("Access")}>
+                                <FormGroup fieldId="account-locked" label={_("Access")} hasNoPaddingTop>
                                     <div>
                                         <div className="account-column-one">
                                             <Checkbox id="account-locked"
@@ -318,10 +320,18 @@ export function AccountDetails({ accounts, groups, shadow, current_user, user })
                                                       label={_("Lock account")}
                                                       onChange={checked => change_locked(checked)} />
                                         </div>
-                                        <Button onClick={() => account_expiration_dialog(account, details.expiration.account_date)}
-                                          isDisabled={!superuser.allowed} variant="link" id="account-expiration-button">
-                                            {details.expiration.account_text}
-                                        </Button>
+                                        <Flex flex={{ default: 'inlineFlex' }}>
+                                            <span id="account-expiration-text">
+                                                {details.expiration.account_text}
+                                            </span>
+                                            <Button onClick={() => account_expiration_dialog(account, details.expiration.account_date)}
+                                                    isDisabled={!superuser.allowed}
+                                                    variant="link"
+                                                    isInline
+                                                    id="account-expiration-button">
+                                                {_("edit")}
+                                            </Button>
+                                        </Flex>
                                     </div>
                                 </FormGroup>
                                 { self_mod_allowed &&
@@ -342,10 +352,18 @@ export function AccountDetails({ accounts, groups, shadow, current_user, user })
                                             </Button>
                                             }
                                         </div>
-                                        <Button onClick={() => password_expiration_dialog(account, details.expiration.password_days)}
-                                  isDisabled={!superuser.allowed} variant="link" id="password-expiration-button">
-                                            {details.expiration.password_text}
-                                        </Button>
+                                        <Flex flex={{ default: 'inlineFlex' }}>
+                                            <span id="password-expiration-text">
+                                                {details.expiration.password_text}
+                                            </span>
+                                            <Button onClick={() => password_expiration_dialog(account, details.expiration.password_days)}
+                                                    isDisabled={!superuser.allowed}
+                                                    variant="link"
+                                                    isInline
+                                                    id="password-expiration-button">
+                                                {_("edit")}
+                                            </Button>
+                                        </Flex>
                                     </div>
                                 </FormGroup>
                                 }

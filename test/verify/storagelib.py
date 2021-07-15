@@ -66,12 +66,14 @@ class StorageHelpers:
 
         Return the device name.
         '''
+        # HACK: https://bugzilla.redhat.com/show_bug.cgi?id=1969408
+        # It would be nicer to remove $F immediately after the call to
+        # losetup, but that will break some versions of lvm2.
         dev = self.machine.execute("set -e; F=$(mktemp /var/tmp/loop.XXXX); "
                                    "dd if=/dev/zero of=$F bs=1M count=%s; "
-                                   "losetup --find --show $F; "
-                                   "rm $F" % size).strip()
+                                   "losetup --find --show $F" % size).strip()
         # right after unmounting the device is often still busy, so retry a few times
-        self.addCleanup(self.machine.execute, "umount {0}; until losetup -d {0}; do sleep 1; done".format(dev), timeout=10)
+        self.addCleanup(self.machine.execute, "umount {0}; rm $(losetup -n -O BACK-FILE -l {0}); until losetup -d {0}; do sleep 1; done".format(dev), timeout=10)
         return dev
 
     def force_remove_disk(self, device):
@@ -100,7 +102,7 @@ class StorageHelpers:
             b.wait_visible(tbody + ".pf-m-expanded")
 
     def content_row_action(self, index, title):
-        btn = self.content_row_tbody(index) + " tr td:last-child button:contains(%s)" % title
+        btn = self.content_row_tbody(index) + " tr:first-child td button:contains(%s)" % title
         self.browser.click(btn)
 
     # The row might come and go a couple of times until it has the
@@ -111,20 +113,14 @@ class StorageHelpers:
         col = self.content_row_tbody(row_index) + " tr:first-child > :nth-child(%d)" % (col_index + 1)
         wait(lambda: self.browser.is_present(col) and val in self.browser.text(col))
 
-    def content_head_action(self, index, title):
-        self.content_row_expand(index)
-        btn = self.content_row_tbody(index) + " .ct-listing-panel-actions button:contains(%s)" % title
-        self.browser.click(btn)
-
     def content_dropdown_action(self, index, title):
-        self.content_row_expand(index)
-        dropdown = self.content_row_tbody(index) + " .ct-listing-panel-actions .pf-c-dropdown"
+        dropdown = self.content_row_tbody(index) + " tr td:last-child .pf-c-dropdown"
         self.browser.click(dropdown + " button.pf-c-dropdown__toggle")
         self.browser.click(dropdown + " a:contains('%s')" % title)
 
     def content_tab_expand(self, row_index, tab_index):
         tab_btn = self.content_row_tbody(row_index) + " .ct-listing-panel-head > nav ul li:nth-child(%d) a" % tab_index
-        tab = self.content_row_tbody(row_index) + " .ct-listing-panel-body:nth-child(%d)" % (tab_index + 1)
+        tab = self.content_row_tbody(row_index) + " .ct-listing-panel-body[data-key=%d]" % (tab_index - 1)
         self.content_row_expand(row_index)
         self.browser.click(tab_btn)
         self.browser.wait_visible(tab)
@@ -164,7 +160,7 @@ class StorageHelpers:
             row = self.content_row_tbody(row_index)
             row_item = row + " tr td.pf-c-table__toggle button"
             tab_btn = row + " .ct-listing-panel-head > nav ul li:nth-child(%d) a" % tab_index
-            tab = row + " .ct-listing-panel-body:nth-child(%d)" % (tab_index + 1)
+            tab = row + " .ct-listing-panel-body[data-key=%d]" % (tab_index - 1)
             cell = tab + " dt:contains(%s) + *" % title
 
             # The DOM might change at any time while we are inspecting
@@ -281,11 +277,11 @@ class StorageHelpers:
     def dialog_is_present(self, field, label):
         return self.browser.is_present('%s :contains("%s") input' % (self.dialog_field(field), label))
 
-    def dialog_wait_val(self, field, val):
+    def dialog_wait_val(self, field, val, unit="1048576"):
         sel = self.dialog_field(field)
         ftype = self.browser.attr(sel, "data-field-type")
         if ftype == "size-slider":
-            self.browser.wait_val(sel + " .size-unit", "1048576")
+            self.browser.wait_val(sel + " .size-unit", unit)
             self.browser.wait_val(sel + " .size-text", str(val))
         elif ftype == "select":
             self.browser.wait_attr(sel, "data-value", val)
@@ -457,6 +453,12 @@ class StorageCase(MachineCase, StorageHelpers):
             self.storaged_version = list(map(int, m.group(1).split(".")))
         else:
             self.storaged_version = [0]
+
+        crypto_types = self.machine.execute("busctl --system get-property org.freedesktop.UDisks2 /org/freedesktop/UDisks2/Manager org.freedesktop.UDisks2.Manager SupportedEncryptionTypes || true")
+        if "luks2" in crypto_types:
+            self.default_crypto_type = "luks2"
+        else:
+            self.default_crypto_type = "luks1"
 
         if "debian" in self.machine.image or "ubuntu" in self.machine.image:
             # Debian's udisks has a patch to use FHS /media directory

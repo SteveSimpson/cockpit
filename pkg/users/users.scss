@@ -1,7 +1,6 @@
 @import "../lib/page.scss";
 @import "@patternfly/patternfly/components/DataList/data-list.scss";
 @import "@patternfly/patternfly/components/Form/form.scss";
-@import "../lib/table.css";
 @import "../lib/ct-card.scss";
 
 #account .pf-c-card {
@@ -226,8 +225,14 @@
     display: inline-block;
 }
 
-.expiration-modal .pf-c-form__group-control .pf-c-radio:first-child {
-    padding-bottom: var(--pf-global--spacer--sm);
+.expiration-modal .pf-c-form__group-control {
+    .pf-c-radio:first-child {
+        padding-bottom: var(--pf-global--spacer--sm);
+    }
+    // Work around for https://github.com/patternfly/patternfly/issues/4061
+    .pf-c-radio:nth-child(2) input {
+        align-self: center;
+    }
 }
 
 .help-block {

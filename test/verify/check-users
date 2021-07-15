@@ -121,7 +121,15 @@ class TestAccounts(MachineCase):
         b.click('#accounts-create-dialog button.apply')
         b.wait_in_text("#accounts-create-dialog .pf-c-form__helper-text.pf-m-error", "The passwords do not match")
 
+        # too long password
+        long_password = "2a02-x!h4a" * 30
+        b.set_input_text('#accounts-create-password-pw1', long_password)
+        b.set_input_text('#accounts-create-password-pw2', long_password)
+        b.click('#accounts-create-dialog button.apply')
+        b.wait_in_text("#accounts-create-dialog .pf-c-form__helper-text.pf-m-error", "Password is longer than 256 characters")
+
         # correct password confirmation
+        b.set_input_text('#accounts-create-password-pw1', good_password)
         b.set_input_text('#accounts-create-password-pw2', good_password)
         b.click('#accounts-create-dialog button.apply')
         b.wait_not_present("#accounts-create-dialog .pf-c-form__helper-text.pf-m-error")
@@ -242,6 +250,13 @@ class TestAccounts(MachineCase):
         b.click('#account-set-password-dialog button.apply')
         b.wait_in_text("#account-set-password-dialog .pf-c-form__helper-text.pf-m-error", "The passwords do not match")
 
+        # too long password
+        long_password = "2a02-x!h4a" * 30
+        b.set_input_text('#account-set-password-pw1', long_password)
+        b.set_input_text('#account-set-password-pw2', long_password)
+        b.click('#account-set-password-dialog button.apply')
+        b.wait_in_text("#account-set-password-dialog .pf-c-form__helper-text.pf-m-error", "Password is longer than 256 characters")
+
         good_password_2 = "cEwghLY§X9R&m8RLwk4Xfed9Bw="
         # Now set to something valid
         b.set_input_text("#account-set-password-pw1", good_password_2)
@@ -273,7 +288,7 @@ class TestAccounts(MachineCase):
             b.go("#/admin")
             b.wait_visible("#account-logout[disabled]")
 
-            (year, month) = m.execute("date +'%Y %B'").strip().split()
+            (year, month) = m.execute("date +'%Y %b'").strip().split()
 
             # Log in as "admin" and the open details in other browser should update
             b2 = self.new_browser(m)
@@ -404,23 +419,23 @@ class TestAccounts(MachineCase):
         b.wait_text("#account-user-name", "scruffy")
 
         # Try to expire the account
-        b.wait_text("#account-expiration-button", "Never lock account")
+        b.wait_text("#account-expiration-text", "Never expire account")
         self.assertEqual(self.accountExpiryInfo("scruffy", "Account expires"), "never")
         b.click("#account-expiration-button")
         b.wait_visible("#account-expiration")
         b.click("#account-expiration-expires")
 
         # Try an invalid date
-        b.set_input_text("#account-expiration-input", "blah")
+        b.set_input_text("#account-expiration-input input", "blah")
         b.click("#account-expiration .pf-c-modal-box__footer button:contains(Change)")
         b.wait_text("#account-expiration .pf-c-form__helper-text.pf-m-error", "Invalid expiration date")
 
         # Now a valid date 30 days in the future
         when = datetime.datetime.now() + datetime.timedelta(days=30)
-        b.set_input_text("#account-expiration-input", when.isoformat().split("T")[0])
+        b.set_input_text("#account-expiration-input input", when.isoformat().split("T")[0])
         b.click("#account-expiration .pf-c-modal-box__footer button:contains(Change)")
         b.wait_not_present("#account-expiration")
-        b.wait_in_text("#account-expiration-button", "Lock account on")
+        b.wait_in_text("#account-expiration-text", "Expire account on")
         self.assertNotEqual(self.accountExpiryInfo("scruffy", "Account expires"), "never")
 
         # Now try and change it back
@@ -429,11 +444,11 @@ class TestAccounts(MachineCase):
         b.click("#account-expiration-never")
         b.click("#account-expiration .pf-c-modal-box__footer button:contains(Change)")
         b.wait_not_present("#account-expiration")
-        b.wait_text("#account-expiration-button", "Never lock account")
+        b.wait_text("#account-expiration-text", "Never expire account")
         self.assertEqual(self.accountExpiryInfo("scruffy", "Account expires"), "never")
 
         # Try to expire a password
-        b.wait_text("#password-expiration-button", "Never expire password")
+        b.wait_text("#password-expiration-text", "Never expire password")
         self.assertEqual(self.accountExpiryInfo("scruffy", "Password expires"), "never")
         b.click("#password-expiration-button")
         b.wait_visible("#password-expiration")
@@ -448,7 +463,7 @@ class TestAccounts(MachineCase):
         b.set_input_text("#password-expiration-input", "30")
         b.click("#password-expiration .pf-c-modal-box__footer button:contains(Change)")
         b.wait_not_present("#password-expiration")
-        b.wait_in_text("#password-expiration-button", "Require password change on")
+        b.wait_in_text("#password-expiration-text", "Require password change on")
         self.assertNotEqual(self.accountExpiryInfo("scruffy", "Password expires"), "never")
 
         # Now try and change it back
@@ -457,7 +472,7 @@ class TestAccounts(MachineCase):
         b.click("#password-expiration-never")
         b.click("#password-expiration .pf-c-modal-box__footer button:contains(Change)")
         b.wait_not_present("#password-expiration")
-        b.wait_text("#password-expiration-button", "Never expire password")
+        b.wait_text("#password-expiration-text", "Never expire password")
         self.assertEqual(self.accountExpiryInfo("scruffy", "Password expires"), "never")
 
         # Now change it to expire again
@@ -472,9 +487,9 @@ class TestAccounts(MachineCase):
         self.login_and_go("/users", user="scruffy")
         b.go("#/scruffy")
         b.wait_text("#account-user-name", "scruffy")
-        b.wait_text("#account-expiration-button", "Never lock account")
+        b.wait_text("#account-expiration-text", "Never expire account")
         b.wait_visible("#account-expiration-button[disabled]")
-        b.wait_in_text("#password-expiration-button", "Require password change on")
+        b.wait_in_text("#password-expiration-text", "Require password change on")
         b.wait_visible("#password-expiration-button[disabled]")
 
         # Lastly force a password change
@@ -486,7 +501,7 @@ class TestAccounts(MachineCase):
         b.wait_visible("#password-reset")
         b.click("#password-reset .pf-c-modal-box__footer button:contains(Reset)")
         b.wait_not_present("password-reset")
-        b.wait_in_text("#password-expiration-button", "Password must be changed")
+        b.wait_in_text("#password-expiration-text", "Password must be changed")
         self.assertEqual(self.accountExpiryInfo("scruffy", "Password expires"), "password must be changed")
 
 

@@ -224,20 +224,23 @@ import {
     Checkbox,
     DataList, DataListItem, DataListCheck, DataListItemRow, DataListItemCells, DataListCell,
     Form, FormGroup,
+    Grid, GridItem,
     Radio,
     Select as TypeAheadSelect, SelectOption, SelectVariant,
-    Spinner,
+    Slider,
+    Spinner, Split,
     TextInput as TextInputPF4,
     Tooltip, TooltipPosition,
 } from "@patternfly/react-core";
-import { InfoCircleIcon } from "@patternfly/react-icons";
+import { InfoCircleIcon, ExclamationTriangleIcon } from "@patternfly/react-icons";
 
-import { show_modal_dialog } from "cockpit-components-dialog.jsx";
+import { show_modal_dialog, apply_modal_dialog } from "cockpit-components-dialog.jsx";
 
 import { fmt_size, block_name, format_size_and_text } from "./utils.js";
 import client from "./client.js";
 
 import "form-layout.scss";
+import "@patternfly/patternfly/components/HelperText/helper-text.css";
 
 const _ = cockpit.gettext;
 
@@ -253,7 +256,7 @@ const Row = ({ field, values, errors, onChange }) => {
         onChange(tag);
     }
 
-    const children = field.render(values[tag], change, validated);
+    const children = field.render(values[tag], change, validated, error);
 
     if (title || title == "") {
         let titleLabel = title;
@@ -271,14 +274,15 @@ const Row = ({ field, values, errors, onChange }) => {
                 { children }
             </FormGroup>
         );
-    } else {
+    } else if (!field.bare) {
         return (
             <FormGroup validated={validated}
-                       helperTextInvalid={error || explanation} hasNoPaddingTop={field.hasNoPaddingTop}>
+                       helperTextInvalid={error} helperText={explanation} hasNoPaddingTop={field.hasNoPaddingTop}>
                 { children }
             </FormGroup>
         );
-    }
+    } else
+        return children;
 };
 
 function is_visible(field, values) {
@@ -286,6 +290,14 @@ function is_visible(field, values) {
 }
 
 const Body = ({ body, fields, values, errors, isFormHorizontal, onChange }) => {
+    let error_alert = null;
+
+    if (errors && errors.toString() != "[object Object]") {
+        // This is a global error from a failed action
+        error_alert = <Alert variant='danger' isInline title={errors.toString()} />;
+        errors = null;
+    }
+
     function make_row(field, index) {
         if (field.length !== undefined)
             return make_rows(field, index);
@@ -299,13 +311,15 @@ const Body = ({ body, fields, values, errors, isFormHorizontal, onChange }) => {
         if (rows.length === 0)
             return null;
         else if (index === undefined) // top-level
-            return <Form isHorizontal={isFormHorizontal !== false}>{ rows }</Form>;
+            return <Form onSubmit={apply_modal_dialog}
+                         isHorizontal={isFormHorizontal !== false}>{ rows }</Form>;
         else // nested
             return <FormGroup key={index}>{ rows }</FormGroup>;
     }
 
     return (
         <>
+            { error_alert }
             { body || null }
             { make_rows(fields) }
         </>
@@ -315,6 +329,16 @@ const Body = ({ body, fields, values, errors, isFormHorizontal, onChange }) => {
 function flatten(arr1) {
     return arr1.reduce((acc, val) => Array.isArray(val) ? acc.concat(flatten(val)) : acc.concat(val), []);
 }
+
+const HelperTextWarning = ({ text }) =>
+    <div className="pf-c-helper-text">
+        <div className="pf-c-helper-text__item pf-m-warning">
+            <span className="pf-c-helper-text__item-icon">
+                <ExclamationTriangleIcon className="ct-icon-exclamation-triangle" />
+            </span>
+            <span className="pf-c-helper-text__item-text">{text}</span>
+        </div>
+    </div>;
 
 export const dialog_open = (def) => {
     const nested_fields = def.Fields || [];
@@ -374,13 +398,14 @@ export const dialog_open = (def) => {
                                         else
                                             return def.Action.action(visible_values, progress_callback);
                                     })
-                                    .catch(error => {
-                                        if (error.toString() != "[object Object]") {
-                                            return Promise.reject(error);
-                                        } else {
-                                            update(error, null);
-                                            return Promise.reject();
+                                    .catch(errors => {
+                                        if (errors && errors.toString() != "[object Object]") {
+                                            // Log errors from failed actions, for debugging and
+                                            // to allow the test suite to catch known issues.
+                                            console.warn(errors.toString());
                                         }
+                                        update(errors, null);
+                                        return Promise.reject();
                                     });
                         };
                         return client.run(func);
@@ -391,7 +416,7 @@ export const dialog_open = (def) => {
 
         const extra = <div>
             { def.Footer }
-            { def.Action && def.Action.Danger ? <Alert isInline variant='danger' title={def.Action.Danger} /> : null }
+            { def.Action && def.Action.Danger ? <HelperTextWarning text={def.Action.Danger} /> : null }
         </div>;
 
         return {
@@ -563,16 +588,17 @@ export const SelectOneRadio = (tag, title, options) => {
         title: title,
         options: options,
         initial_value: options.value || options.choices[0].value,
+        hasNoPaddingTop: true,
 
         render: (val, change) => {
             return (
-                <FormGroup isInline data-field={tag} data-field-type="select-radio">
+                <Split hasGutter data-field={tag} data-field-type="select-radio">
                     { options.choices.map(c => (
                         <Radio key={c.value} isChecked={val == c.value} data-data={c.value}
                             id={tag + '.' + c.value}
                             onChange={event => change(c.value)} label={c.title} />))
                     }
-                </FormGroup>
+                </Split>
             );
         }
     };
@@ -717,23 +743,21 @@ export const SelectSpace = (tag, title, options) => {
 
 const CheckBoxComponent = ({ tag, val, title, tooltip, update_function }) => {
     return (
-        <div key={tag} className="ct-storage-checkbox">
-            <Checkbox data-field={tag} data-field-type="checkbox"
-                      id={tag}
-                      isChecked={val}
-                      label={
-                          <>
-                              {title}
-                              { tooltip && <Tooltip id="tip-service" content={tooltip} position={TooltipPosition.right}>
-                                  <Button className="dialog-item-tooltip" variant="link">
-                                      <InfoCircleIcon />
-                                  </Button>
-                              </Tooltip>
-                              }
-                          </>
-                      }
-                      onChange={update_function} />
-        </div>
+        <Checkbox data-field={tag} data-field-type="checkbox"
+                  id={tag}
+                  isChecked={val}
+                  label={
+                      <>
+                          {title}
+                          { tooltip && <Tooltip id="tip-service" content={tooltip} position={TooltipPosition.right}>
+                              <Button className="dialog-item-tooltip" variant="link">
+                                  <InfoCircleIcon />
+                              </Button>
+                          </Tooltip>
+                          }
+                      </>
+                  }
+                  onChange={update_function} />
     );
 };
 
@@ -773,18 +797,14 @@ export const CheckBoxes = (tag, title, options) => {
             if (options.fields.length == 1)
                 return fieldset;
 
-            return (
-                <div role="group">
-                    { fieldset }
-                </div>
-            );
+            return <>{ fieldset }</>;
         }
     };
 };
 
 const TextInputCheckedComponent = ({ tag, val, title, update_function }) => {
     return (
-        <div className="ct-storage-checkbox" data-field={tag} data-field-type="text-input-checked" key={tag}>
+        <div data-field={tag} data-field-type="text-input-checked" key={tag}>
             <Checkbox isChecked={val !== false}
                       id={tag}
                       label={title}
@@ -805,45 +825,6 @@ export const Skip = (className, options) => {
             return <div className={className} />;
         }
     };
-};
-
-const StatelessSlider = ({ fraction, onChange }) => {
-    function start_dragging(event) {
-        let el = event.currentTarget;
-        const width = el.offsetWidth;
-        let left = el.offsetLeft;
-        while (el.offsetParent) {
-            el = el.offsetParent;
-            left += el.offsetLeft;
-        }
-
-        function drag(event) {
-            let f = (event.pageX - left) / width;
-            if (f < 0) f = 0;
-            if (f > 1) f = 1;
-            onChange(f);
-        }
-
-        function stop_dragging() {
-            document.removeEventListener("mousemove", drag);
-            document.removeEventListener("mouseup", stop_dragging);
-        }
-
-        document.addEventListener("mousemove", drag);
-        document.addEventListener("mouseup", stop_dragging);
-        drag(event);
-    }
-
-    if (fraction < 0) fraction = 0;
-    if (fraction > 1) fraction = 1;
-
-    return (
-        <div className="slider" role="presentation" onMouseDown={start_dragging}>
-            <div className="slider-bar" style={{ width: fraction * 100 + "%" }}>
-                <div className="slider-thumb" />
-            </div>
-        </div>
-    );
 };
 
 function size_slider_round(value, round) {
@@ -872,7 +853,7 @@ class SizeSliderElement extends React.Component {
         const { unit } = this.state;
 
         const change_slider = (f) => {
-            onChange(Math.max(min, size_slider_round(f * max, round)));
+            onChange(Math.max(min, size_slider_round(f * max / 100, round)));
         };
 
         const change_text = (value) => {
@@ -885,8 +866,6 @@ class SizeSliderElement extends React.Component {
             onChange({ text: value, unit: unit });
         };
 
-        const change_unit = (u) => this.setState({ unit: Number(u) });
-
         let slider_val, text_val;
         if (val.text && val.unit) {
             slider_val = Number(val.text) * val.unit;
@@ -896,14 +875,25 @@ class SizeSliderElement extends React.Component {
             text_val = cockpit.format_number(val / unit);
         }
 
+        const change_unit = (u) => this.setState({
+            unit: Number(u),
+            text: (text_val / this.state.unit) * Number(u)
+        });
+
         return (
-            <div className="size-sliderx">
-                <StatelessSlider fraction={slider_val / max} onChange={change_slider} />
-                <TextInputPF4 className="size-text" value={text_val} onChange={change_text} />
-                <FormSelect className="size-unit" value={unit} aria-label={tag} onChange={change_unit}>
-                    { this.units.map(u => <FormSelectOption value={u.factor} key={u.name} label={u.name} />) }
-                </FormSelect>
-            </div>
+            <Grid hasGutter className="size-slider">
+                <GridItem span={12} sm={8}>
+                    <Slider showBoundaries={false} value={(slider_val / max) * 100} onChange={change_slider} />
+                </GridItem>
+                <GridItem span={6} sm={2}>
+                    <TextInputPF4 className="size-text" value={text_val} onChange={change_text} />
+                </GridItem>
+                <GridItem span={6} sm={2}>
+                    <FormSelect className="size-unit" value={unit} aria-label={tag} onChange={change_unit}>
+                        { this.units.map(u => <FormSelectOption value={u.factor} key={u.name} label={u.name} />) }
+                    </FormSelect>
+                </GridItem>
+            </Grid>
         );
     }
 }

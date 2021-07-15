@@ -1,4 +1,6 @@
 /*** PF4 overrides ***/
+// Pull in variables (for breakpoints)
+@import "_global-variables.scss";
 
 /* WORKAROUND: Navigation problems with Tertiary Nav widget on mobile */
 /* See: https://github.com/patternfly/patternfly-design/issues/840 */
@@ -33,14 +35,8 @@ svg {
     vertical-align: -0.125em;
 }
 
-// Patternfly horizontal lists should convert to vertical in small screens https://github.com/patternfly/patternfly/issues/3630
-@media (min-width: 640px) {
-    .pf-c-description-list {
-        --pf-c-description-list__group--GridTemplateColumns: var(--pf-c-description-list--m-horizontal__group--GridTemplateColumns);
-    }
-}
-
-// The default gap between the rows in horizonal lists is too large
+// The default gap between the rows in horizontal lists is too large
+.pf-c-description-list.pf-m-horizontal-on-sm,
 .pf-c-description-list.pf-m-horizontal {
     --pf-c-description-list--RowGap: 1rem;
 }
@@ -126,8 +122,37 @@ svg {
 // Alerts use elements that have fonts set in other frameworks (including PF3);
 // generally, this is an H4 that often has a font size and sometimes family set.
 // Therefore, it should inherit from the alert font set at the pf-c-alert level.
-// https://github.com/patternfly/patternfly/issues/4004
+// https://github.com/patternfly/patternfly/issues/4206
 .pf-c-alert__title {
     font-size: inherit;
     font-family: inherit;
+}
+
+.pf-c-toolbar {
+    // There should be an opt-in to make toolbars sticky.
+    // For now, we'll use a ct-sticky class while we wait for an official solution.
+    // https://github.com/patternfly/patternfly/issues/4113
+    &.ct-sticky {
+        position: sticky;
+        top: 0;
+        z-index: 2;
+    }
+
+    // Make summary content use the same vertical space as the filter toggle,
+    // when possible.
+    // https://github.com/patternfly/patternfly-design/issues/1055
+    &.ct-compact {
+        @media screen and (max-width: $pf-global--breakpoint--lg - 1) {
+            display: flex;
+            flex-wrap: wrap;
+
+            > .pf-c-toolbar__content:first-child {
+                flex: auto;
+            }
+
+            .pf-c-toolbar__content-section {
+                width: auto;
+            }
+        }
+    }
 }

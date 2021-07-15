@@ -119,8 +119,8 @@ class TestRunTest(MachineCase):
 
         env = os.environ.copy()
         env["TEST_FAILURES"] = "1"
-        # pretend this was a PR against master (set by CI normally, or by the user with --base)
-        env["BASE_BRANCH"] = "master"
+        # pretend this was a PR against main (set by CI normally, or by the user with --base)
+        env["BASE_BRANCH"] = "main"
         try:
             del env["TEST_JOBS"]
         except KeyError:
@@ -229,6 +229,11 @@ class TestTestlib(MachineCase):
         # NSS/home got restored
         self.assertNotIn("cockpittest", self.machine.execute("cat /etc/passwd"))
         self.machine.execute("test ! -e /home/cockpittest")
+
+    @nondestructive
+    def testMiscAPI(self):
+        assert self.system_before(1000)
+        assert not self.system_before(100)
 
 
 @skipDistroPackage()

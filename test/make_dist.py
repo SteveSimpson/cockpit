@@ -16,16 +16,14 @@
 # You should have received a copy of the GNU Lesser General Public License
 # along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
 
-import glob
-import io
 import multiprocessing
 import os
-import urllib.request
 import subprocess
 import sys
-import tarfile
-import time
 import argparse
+
+
+CACHE_REPO = os.getenv("GITHUB_BASE", "cockpit-project/cockpit") + "-dist"
 
 
 def message(*args):
@@ -47,120 +45,35 @@ def build_dist():
             subprocess.check_call('./autogen.sh')
 
     # this is for a development build, not a release, so we care about speed, not best size
-    subprocess.check_call(["make", "--silent", "-j%i" % multiprocessing.cpu_count(),
-                           "NO_DIST_CACHE=1", "XZ_COMPRESS_FLAGS=-0", "dist"])
+    subprocess.check_call(["make", "--silent", "-j%i" % multiprocessing.cpu_count(), "XZ_OPT=-0", "dist"])
     return subprocess.check_output(["make", "dump-dist"], universal_newlines=True).strip()
 
 
-def download_dist(wait=False):
-    '''Download dists tarball for current git SHA from GitHub
+def download_cache(wait=False):
+    cmd = ['tools/webpack-jumpstart']
+    if wait:
+        cmd.append('--wait')
 
-    These are produced by .github/workflows/build-dist.yml for every PR and push.
-    This is a lot faster than having to npm install and run webpack.
-
-    Returns path to downloaded tarball, or None if it isn't available.
-    This can happen because the current directory is not a git checkout, or it is
-    a SHA which is not pushed/PRed.
-    '''
     try:
-        sha = subprocess.check_output(["git", "rev-parse", "HEAD"], stderr=subprocess.DEVNULL).decode().strip()
+        subprocess.check_call(cmd)
+        return True
     except subprocess.CalledProcessError:
-        message("make_dist: not a git repository")
-        return None
-
-    if subprocess.call(["git", "diff", "--quiet", "--", ":^test", ":^packit.yaml", ":^.github"]) > 0:
-        message("make_dist: uncommitted local changes, skipping download")
-        return None
-
-    dists = glob.glob(f"cockpit-*{sha[:8]}*.tar.xz")
-    if dists:
-        message("make_dist: already downloaded", dists[0])
-        return os.path.abspath(dists[0])
-
-    download_url = f"https://github.com/{ os.getenv('GITHUB_BASE', 'cockpit-project/cockpit') }-dist/raw/master/{sha}.tar"
-    request = urllib.request.Request(download_url)
-    tario = io.BytesIO()
-    retries = 50 if wait else 1  # 25 minutes, once every 30s
-    while retries > 0:
-        try:
-            with urllib.request.urlopen(request) as response:
-                sys.stderr.write(f"make_dist: Downloading dist tarball from {download_url} ...\n")
-                if os.isatty(sys.stderr.fileno()):
-                    total_size = 0
-                else:
-                    total_size = None
-                MB = 10**6
-                # read tar into a stringio, as the stream is not seekable and tar requires that
-                while True:
-                    block = response.read(MB)
-                    if len(block) == 0:
-                        break
-                    if total_size is not None:
-                        total_size += len(block)
-                        sys.stderr.write(f"\r{ total_size // MB } MB")
-
-                    tario.write(block)
-
-                # clear the download progress in tty mode
-                if total_size is not None:
-                    sys.stderr.write("\r                             \r")
-
-                break
-
-        except urllib.error.HTTPError as e:
-            retries -= 1
-
-            if retries == 0:
-                message(f"make_dist: Downloading {download_url} failed:", e)
-                return None
-
-            message(f"make_dist: {download_url} not yet available, waiting...")
-            time.sleep(30)
-
-    tario.seek(0)
-    with tarfile.open(fileobj=tario) as ftar:
-        names = ftar.getnames()
-        try:
-            names.remove('.')
-        except ValueError:
-            pass
-        if len(names) != 1 or not names[0].endswith(".tar.xz"):
-            message("make_dist: expected tar with exactly one tar.xz member")
-            return None
-        ftar.extract(names[0])
-        tar_path = os.path.realpath(names[0])
-
-    # Extract npm/webpack related files locally for speeding up the build and allowing integration tests to run
-    unpack_paths = [d for d in ["dist", "node_modules", "package-lock.json", "tools/debian/copyright"] if not os.path.exists(d)]
-    if unpack_paths:
-        message("make_dist: Extracting from tarball:", ' '.join(unpack_paths))
-        prefix = os.path.basename(tar_path).split('.tar')[0] + '/'
-        prefixed_unpack_paths = [prefix + d for d in unpack_paths]
-        subprocess.check_call(["tar", "--touch", "--strip-components=1", "-xf", tar_path] + prefixed_unpack_paths)
-        # after the above, dist manifests may be newer than copyright due to tar touching order
-        # restore file time stamps as they would be after a build
-        subprocess.check_call(["touch", "tools/debian/copyright"])
-
-    return tar_path
+        message("make_dist: Downloading pre-built dist failed")
+        return False
 
 
 def make_dist(download_only=False, wait_download=False):
-    source = None
-    # on an unbuilt tree, try to download a pre-generated dist tarball; this is a lot faster
+    # on an unbuilt tree, try to download a pre-generated webpack build; this is a lot faster
     # these tarballs are built for production NPM mode
     if not os.path.exists("dist") and os.getenv("NODE_ENV") != "development":
-        source = download_dist(wait_download)
-
-    if not source:
-        if not download_only and not wait_download:
-            source = build_dist()
-        else:
+        if not download_cache(wait_download) and (download_only or wait_download):
             sys.exit(1)
-    return source
+
+    return build_dist()
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description="Download or build release tarbal")
+    parser = argparse.ArgumentParser(description="Generate release dist tarball, download cached webpack build if available")
     parser.add_argument('-d', '--download-only', action='store_true', help="Fail instead of build locally if download is not available")
     parser.add_argument('-w', '--wait', action='store_true', help="Wait for up to 20 minutes for download tarball (implies -d)")
     args = parser.parse_args()

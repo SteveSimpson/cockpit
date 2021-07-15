@@ -44,7 +44,6 @@ import { FirewallSwitch } from "./firewall-switch.jsx";
 import { superuser } from "superuser";
 
 import "page.scss";
-import "table.css";
 import "form-layout.scss";
 import "./networking.scss";
 
@@ -185,6 +184,7 @@ function ZoneSection(props) {
         {props.zone.services.length > 0 &&
         <CardBody className="contains-list">
             <ListingTable columns={[{ title: _("Service"), props: { width: 40 } }, { title: _("TCP"), props: { width: 30 } }, { title: _("UDP"), props: { width: 30 } }]}
+                          id={props.zone.id}
                           aria-label={props.zone.id}
                           variant="compact"
                           emptyCaption={_("There are no active services in this zone")}
@@ -312,7 +312,7 @@ class AddServicesModal extends React.Component {
         return ret;
     }
 
-    save() {
+    save(event) {
         let p;
         if (this.state.custom) {
             p = firewall.createService(this.state.custom_id, this.createPorts(), this.props.zoneId);
@@ -326,6 +326,10 @@ class AddServicesModal extends React.Component {
                         dialogErrorDetail: error.name + ": " + error.message,
                     });
                 });
+
+        if (event)
+            event.preventDefault();
+        return false;
     }
 
     onToggleService(event, serviceId) {
@@ -532,7 +536,7 @@ class AddServicesModal extends React.Component {
                        </Button>
                    </>}
             >
-                <Form isHorizontal>
+                <Form isHorizontal onSubmit={this.save}>
                     <FormGroup className="add-services-dialog-type" isInline>
                         <Radio name="type"
                                id="add-services-dialog--services"
@@ -652,7 +656,7 @@ class ActivateZoneModal extends React.Component {
         this.setState({ [key]: value });
     }
 
-    save() {
+    save(event) {
         let p;
         if (firewall.zones[this.state.zone].services.indexOf("cockpit") === -1)
             p = firewall.addService(this.state.zone, "cockpit");
@@ -669,6 +673,10 @@ class ActivateZoneModal extends React.Component {
                             dialogErrorDetail: error.name + ": " + error.message,
                         });
                     }));
+
+        if (event)
+            event.preventDefault();
+        return false;
     }
 
     render() {
@@ -702,7 +710,7 @@ class ActivateZoneModal extends React.Component {
                        </Button>
                    </>}
             >
-                <Form isHorizontal>
+                <Form isHorizontal onSubmit={this.save}>
                     <FormGroup label={ _("Trust level") } className="add-zone-zones">
                         <Flex>
                             <FlexItem className="add-zone-zones-firewalld">

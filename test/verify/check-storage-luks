@@ -54,18 +54,31 @@ class TestStorageLuks(StorageCase):
         self.dialog_wait_open()
         self.dialog_set_val("size", 17)
         self.dialog_set_val("type", "ext4")
-        self.dialog_set_val("crypto.on", True)
+        self.dialog_set_val("crypto", self.default_crypto_type)
         self.dialog_set_val("name", "ENCRYPTED")
         self.dialog_set_val("passphrase", "vainu-reku-toma-rolle-kaja")
         self.dialog_set_val("passphrase2", "vainu-reku-toma-rolle-kaja")
         self.dialog_set_val("store_passphrase.on", True)
         self.dialog_set_val("crypto_options.extra", "crypto,options")
         self.dialog_set_val("mount_point", mount_point_secret)
-        self.dialog_set_val("mount_options.auto", False)
+        self.dialog_set_val("mount_options.auto", True)
+        b.assert_pixels("#dialog", "format")
         self.dialog_apply()
         self.dialog_wait_close()
         self.content_row_wait_in_col(1, 1, "Encrypted data")
         self.content_row_wait_in_col(2, 1, "ext4 file system")
+
+        if self.default_crypto_type == "luks1":
+            self.content_tab_wait_in_info(1, 2, "Encryption type", "LUKS1")
+        elif self.default_crypto_type == "luks2":
+            self.content_tab_wait_in_info(1, 2, "Encryption type", "LUKS2")
+
+        # cut off minutes, to avoid a too wide race condition in the test
+        date_no_mins = b.eval_js("Intl.DateTimeFormat('en', { dateStyle: 'medium', timeStyle: 'short' }).format()").split(':')[0]
+        self.content_tab_wait_in_info(1, 2, "Stored passphrase", "Last modified: %s:" % date_no_mins)
+
+        tab = self.content_tab_expand(1, 2)
+        b.assert_pixels(tab, "tab", ignore=["dt:contains(Stored passphrase) + dd"])
 
         self.wait_in_storaged_configuration(mount_point_secret)
         self.wait_in_storaged_configuration("crypto,options")
@@ -74,7 +87,9 @@ class TestStorageLuks(StorageCase):
         self.assertNotEqual(m.execute("grep %s /etc/fstab" % mount_point_secret), "")
         self.assertEqual(m.execute("cat /etc/luks-keys/*"), "vainu-reku-toma-rolle-kaja")
 
-        # Lock it
+        # Unmount and Lock it
+        self.content_dropdown_action(2, "Unmount")
+        self.content_tab_wait_in_info(2, 1, "Mount point", "The filesystem is not mounted")
         self.content_dropdown_action(1, "Lock")
         b.wait_not_in_text("#detail-content", "ext4 file system")
 
@@ -85,7 +100,7 @@ class TestStorageLuks(StorageCase):
         b.wait_visible("#storage-detail")
 
         # Unlock, this uses the stored passphrase
-        self.content_head_action(1, "Unlock")
+        self.content_row_action(1, "Unlock")
         self.content_row_wait_in_col(2, 1, "ext4 file system")
 
         # Change options.  We keep trying until the stack has synched
@@ -97,13 +112,22 @@ class TestStorageLuks(StorageCase):
         self.assertNotEqual(m.execute("grep 'weird,options' /etc/crypttab"), "")
         self.wait_in_storaged_configuration("weird,options")
 
-        # Change passphrase
+        # Change stored passphrase
         edit_button = self.content_tab_info_label(1, 2, "Stored passphrase") + " + dd button"
         self.dialog_with_retry(trigger=lambda: b.click(edit_button),
                                expect={"passphrase": "vainu-reku-toma-rolle-kaja"},
                                values={"passphrase": "wrong-passphrase"})
 
         self.assertEqual(m.execute("cat /etc/luks-keys/*"), "wrong-passphrase")
+
+        # Lock it
+        self.content_dropdown_action(1, "Lock")
+        b.wait_not_in_text("#detail-content", "ext4 file system")
+
+        # Unlock, this tries the wrong passphrase but eventually prompts.
+        self.content_row_action(1, "Unlock")
+        self.dialog({"passphrase": "vainu-reku-toma-rolle-kaja"})
+        self.content_row_wait_in_col(2, 1, "ext4 file system")
 
         # Remove passphrase
         edit_button = self.content_tab_info_label(1, 2, "Stored passphrase") + " + dd button"
@@ -117,7 +141,7 @@ class TestStorageLuks(StorageCase):
         b.wait_not_in_text("#detail-content", "ext4 file system")
 
         # Unlock, this asks for a passphrase
-        self.content_head_action(1, "Unlock")
+        self.content_row_action(1, "Unlock")
         self.dialog({"passphrase": "vainu-reku-toma-rolle-kaja"})
         self.content_row_wait_in_col(2, 1, "ext4 file system")
 
@@ -139,18 +163,13 @@ class TestStorageLuks(StorageCase):
         b.logout()
         wait(lambda: m.execute("(loginctl list-users | grep admin) || true") == "")
 
-    @skipImage("No clevis/tang", "debian-stable", "debian-testing", "ubuntu-2004", "ubuntu-stable")
     def testClevisTang(self):
         m = self.machine
         b = self.browser
 
-        # We generate the keys and cache explicitly before starting
-        # the socket.  This allows us to control their names, which
-        # helps later on.
-
-        m.execute("rm -rf /var/db/tang/*")
-        m.execute("jose jwk gen -i '{\"alg\":\"ES512\"}' >/var/db/tang/sig1.jwk")
-        m.execute("jose jwk gen -i '{\"alg\":\"ECMR\"}' -o /var/db/tang/enc1.jwk")
+        if m.image == "ubuntu-stable":
+            # ubuntu-stable needs this workaround.
+            m.execute("mkdir -p /var/db/tang")
 
         m.execute("systemctl start tangd.socket")
 
@@ -162,9 +181,9 @@ class TestStorageLuks(StorageCase):
         b.click('.sidepanel-row:contains("MYDISK")')
         b.wait_visible("#storage-detail")
 
-        self.content_head_action(1, "Format")
+        self.content_row_action(1, "Format")
         self.dialog({"type": "ext4",
-                     "crypto.on": True,
+                     "crypto": self.default_crypto_type,
                      "name": "ENCRYPTED",
                      "mount_point": "/foo",
                      "mount_options.auto": False,
@@ -178,7 +197,7 @@ class TestStorageLuks(StorageCase):
         self.content_dropdown_action(1, "Lock")
         b.wait_not_in_text("#detail-content", "ext4 file system")
 
-        self.content_tab_wait_in_info(1, 1, "Options", "(none)")
+        self.content_tab_wait_in_info(1, 1, "Options", "none")
         tab = self.content_tab_expand(1, 1)
         panel = tab + " .pf-c-card:contains(Keys) "
         b.wait_visible(panel)
@@ -191,10 +210,13 @@ class TestStorageLuks(StorageCase):
         self.dialog_wait_apply_enabled()
         self.dialog_set_val("type", "tang")
         self.dialog_set_val("tang_url", "127.0.0.1")
-        self.dialog_set_val("passphrase", "vainu-reku-toma-rolle-kaja")
+        self.dialog_set_val("passphrase", "wrong-passphrase")
         self.dialog_apply()
-        b.wait_in_text("#dialog", "Make sure the key hash from the Tang server matches:")
-        b.wait_in_text("#dialog", m.execute("jose jwk thp -i /var/db/tang/sig1.jwk").strip())
+        b.wait_in_text("#dialog", "Make sure the key hash from the Tang server matches")
+        b.wait_in_text("#dialog", m.execute("tang-show-keys").strip())
+        self.dialog_apply()
+        b.wait_in_text("#dialog", "No key available with this passphrase.")
+        self.dialog_set_val("passphrase", "vainu-reku-toma-rolle-kaja")
         self.dialog_apply()
         self.dialog_wait_close()
         b.wait_visible(panel + "ul li:nth-child(2)")
@@ -202,7 +224,7 @@ class TestStorageLuks(StorageCase):
 
         # Unlock it.  This should succeed without prompting.
         #
-        self.content_head_action(1, "Unlock")
+        self.content_row_action(1, "Unlock")
         self.content_row_wait_in_col(2, 1, "ext4 file system")
 
         # Edit the key, without providing an existing passphrase
@@ -213,8 +235,8 @@ class TestStorageLuks(StorageCase):
         self.dialog_wait_val("tang_url", "127.0.0.1")
         self.dialog_set_val("tang_url", "http://127.0.0.1/")
         self.dialog_apply()
-        b.wait_in_text("#dialog", "Make sure the key hash from the Tang server matches:")
-        b.wait_in_text("#dialog", m.execute("jose jwk thp -i /var/db/tang/sig1.jwk").strip())
+        b.wait_in_text("#dialog", "Make sure the key hash from the Tang server matches")
+        b.wait_in_text("#dialog", m.execute("tang-show-keys").strip())
         self.dialog_apply()
         self.dialog_wait_close()
         b.wait_in_text(panel + "ul li:nth-child(2)", "http://127.0.0.1/")
@@ -226,12 +248,11 @@ class TestStorageLuks(StorageCase):
         b.wait_not_present(panel + "ul li:nth-child(2)")
 
     @skipImage("No clevis/tang", "debian-stable", "debian-testing", "ubuntu-2004", "ubuntu-stable")
-    def testSlots(self):
+    def testLuks1Slots(self):
         self.allow_journal_messages("Device is not initialized.*", ".*could not be opened.")
         m = self.machine
         b = self.browser
 
-        luks_2 = m.image.startswith("rhel") or m.image.startswith("centos")
         error_base = "Error unlocking /dev/sda: Failed to activate device: "
         error_messages = [error_base + "Operation not permitted",
                           error_base + "Incorrect passphrase."]
@@ -243,9 +264,9 @@ class TestStorageLuks(StorageCase):
         b.click('.sidepanel-row:contains("MYDISK")')
         b.wait_visible("#storage-detail")
         # create volume and passphrase
-        self.content_head_action(1, "Format")
+        self.content_row_action(1, "Format")
         self.dialog({"type": "ext4",
-                     "crypto.on": True,
+                     "crypto": "luks1",
                      "name": "ENCRYPTED",
                      "mount_point": "/foo",
                      "mount_options.auto": False,
@@ -253,7 +274,7 @@ class TestStorageLuks(StorageCase):
                      "passphrase2": "vainu-reku-toma-rolle-kaja"})
         self.content_row_wait_in_col(1, 1, "Encrypted data")
         self.content_row_wait_in_col(2, 1, "ext4 file system")
-        self.content_tab_wait_in_info(1, 1, "Options", "(none)")
+        self.content_tab_wait_in_info(1, 1, "Options", "none")
         # add one more passphrase
         tab = self.content_tab_expand(1, 1)
         panel = tab + " .pf-c-card:contains(Keys) "
@@ -270,25 +291,29 @@ class TestStorageLuks(StorageCase):
         # unlock with first passphrase
         self.content_dropdown_action(1, "Lock")
         b.wait_not_in_text("#detail-content", "ext4 file system")
-        self.content_head_action(1, "Unlock")
+        self.content_row_action(1, "Unlock")
         self.dialog({"passphrase": "vainu-reku-toma-rolle-kaja"})
         self.content_row_wait_in_col(2, 1, "ext4 file system")
         # unlock with second passphrase
         self.content_dropdown_action(1, "Lock")
         b.wait_not_in_text("#detail-content", "ext4 file system")
-        self.content_head_action(1, "Unlock")
+        self.content_row_action(1, "Unlock")
         self.dialog({"passphrase": "vainu-reku-toma-rolle-kaja-1"})
         self.content_row_wait_in_col(2, 1, "ext4 file system")
-        # delete second key slot by providing passphrase
+        # delete second key slot
         b.click(panel + "li:nth-child(2) button[aria-label=Remove]")
-        self.dialog_wait_open()
-        b.set_input_text(self.dialog_field("passphrase") + " input[type=password]", "vainu-reku-toma-rolle-kaja-1")
-        self.dialog_apply()
-        self.dialog_wait_close()
+        # do not accept the same passphrase
+        b.set_input_text("#remove-passphrase", "vainu-reku-toma-rolle-kaja-1")
+        b.click("button:contains('Remove')")
+        b.wait_in_text(".pf-c-alert__title", "No key available with this passphrase.")
+        # delete with passphrase from slot 0
+        b.set_input_text("#remove-passphrase", "vainu-reku-toma-rolle-kaja")
+        b.click("button:contains('Remove')")
+        b.wait_not_present("#remove-passphrase")
         # check that it is not possible to unlock with deleted passphrase
         self.content_dropdown_action(1, "Lock")
         b.wait_not_in_text("#detail-content", "ext4 file system")
-        self.content_head_action(1, "Unlock")
+        self.content_row_action(1, "Unlock")
         self.dialog_wait_open()
         self.dialog_set_val("passphrase", "vainu-reku-toma-rolle-kaja-1")
         self.dialog_apply()
@@ -308,30 +333,29 @@ class TestStorageLuks(StorageCase):
             self.dialog_apply()
             self.dialog_wait_close()
 
-        if not luks_2:
-            # check if add button is inactive
-            b.wait_visible(panel + ".pf-c-card__header button:disabled")
-            # check if edit button is inactive
-            slots_row = tab + " .pf-c-card ul li:first-child"
-            b.wait_visible(slots_row + " button:disabled")
+        # check if add button is inactive
+        b.wait_visible(panel + ".pf-c-card__header button:disabled")
+        # check if edit button is inactive
+        slots_row = tab + " .pf-c-card ul li:first-child"
+        b.wait_visible(slots_row + " button:disabled")
 
         # remove one slot
         slots_list = tab + " .pf-c-card ul "
-        b.wait_visible(slots_list + "li:last-child button[aria-label=Remove]")
+        b.wait_visible(".pf-c-data-list__cell:contains('Slot 7')")
         b.click(slots_list + "li:last-child button[aria-label=Remove]")
-        b.set_input_text(self.dialog_field("passphrase") + " input[type=password]", "vainu-reku-toma-rolle-kaja-7")
-        self.dialog_apply()
-        self.dialog_wait_close()
+        b.set_input_text("#remove-passphrase", "vainu-reku-toma-rolle-kaja-6")
+        b.click("button:contains('Remove')")
+        b.wait_not_present("#remove-passphrase")
         # check if buttons have become enabled after removing last slot
         b.wait_not_present(slots_list + ":disabled")
         b.wait_not_present(panel + ":disabled")
         # remove slot 0, with the original passphrase
         b.click(slots_list + "li:nth-child(1) button[aria-label=Remove]")
-        b.click(self.dialog_field("passphrase") + " label:contains(Force remove passphrase in key slot 0)")
-        self.dialog_apply()
-        self.dialog_wait_close()
+        b.click("#force-remove-passphrase")
+        b.click("button:contains('Remove')")
+        b.wait_not_present("#remove-passphrase")
         # check that it is not possible to unlock with deleted passphrase
-        self.content_head_action(1, "Unlock")
+        self.content_row_action(1, "Unlock")
         self.dialog_wait_open()
         self.dialog_set_val("passphrase", "vainu-reku-toma-rolle-kaja")
         self.dialog_apply()
@@ -349,7 +373,7 @@ class TestStorageLuks(StorageCase):
         self.dialog_apply()
         self.dialog_wait_close()
         # unlock volume with the newly created passphrase
-        self.content_head_action(1, "Unlock")
+        self.content_row_action(1, "Unlock")
         self.dialog({"passphrase": "vainu-reku-toma-rolle-kaja-8"})
         self.content_row_wait_in_col(2, 1, "ext4 file system")
 
@@ -365,9 +389,9 @@ class TestStorageLuks(StorageCase):
         b.click('.sidepanel-row:contains("MYDISK")')
         b.wait_visible("#storage-detail")
 
-        self.content_head_action(1, "Format")
+        self.content_row_action(1, "Format")
         self.dialog({"type": "empty",
-                     "crypto.on": True,
+                     "crypto": self.default_crypto_type,
                      "passphrase": "vainu-reku-toma-rolle-kaja",
                      "passphrase2": "vainu-reku-toma-rolle-kaja"})
         self.content_row_wait_in_col(1, 1, "Encrypted data")
@@ -386,9 +410,9 @@ class TestStorageLuks(StorageCase):
         b.click('.sidepanel-row:contains("MYDISK")')
         b.wait_visible("#storage-detail")
 
-        self.content_head_action(1, "Format")
+        self.content_row_action(1, "Format")
         self.dialog({"type": "ext4",
-                     "crypto.on": True,
+                     "crypto": self.default_crypto_type,
                      "crypto_options.auto": False,
                      "passphrase": "vainu-reku-toma-rolle-kaja",
                      "passphrase2": "vainu-reku-toma-rolle-kaja",
@@ -408,7 +432,7 @@ class TestStorageLuks(StorageCase):
         self.assertIn("noauto", m.execute("grep /run/foo /etc/fstab || true"))
 
         # Mounting should also keep the "noauto", but it should not show up in the extra options
-        self.content_head_action(2, "Mount")
+        self.content_row_action(2, "Mount")
         self.dialog_check({"mount_options.extra": False})
         self.dialog_apply()
         self.wait_mounted(2, 1)

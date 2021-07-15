@@ -35,6 +35,7 @@ import { Modifications } from "cockpit-components-modifications.jsx";
 import { EmptyStatePanel } from "cockpit-components-empty-state.jsx";
 import { ListingTable } from "cockpit-components-table.jsx";
 import { ListingPanel } from 'cockpit-components-listing-panel.jsx';
+import * as timeformat from 'timeformat';
 
 const _ = cockpit.gettext;
 
@@ -344,18 +345,18 @@ export class SETroubleshootPage extends React.Component {
                 if (itm.details && 'firstSeen' in itm.details) {
                     if (itm.details.reportCount >= 2) {
                         listingDetail = cockpit.format(_("Occurred between $0 and $1"),
-                                                       itm.details.firstSeen.calendar(),
-                                                       itm.details.lastSeen.calendar()
+                                                       timeformat.dateTime(itm.details.firstSeen),
+                                                       timeformat.dateTime(itm.details.lastSeen)
                         );
                     } else {
-                        listingDetail = cockpit.format(_("Occurred $0"), itm.details.firstSeen.calendar());
+                        listingDetail = cockpit.format(_("Occurred $0"), timeformat.dateTime(itm.details.firstSeen));
                     }
                 }
                 var onDeleteClick;
                 if (itm.details)
                     onDeleteClick = self.handleDeleteAlert.bind(self, itm.details.localId);
                 var dismissAction = (
-                    <Button id="selinux-alert-dismiss"
+                    <Button className="selinux-alert-dismiss"
                             isSmall
                             variant="danger"
                             aria-label={ _("Dismiss") }

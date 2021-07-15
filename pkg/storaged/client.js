@@ -447,7 +447,7 @@ function init_model(callback) {
     }
 
     function query_fsys_info() {
-        var info = {
+        const info = {
             xfs: {
                 can_format: true,
                 can_shrink: false,
@@ -465,19 +465,15 @@ function init_model(callback) {
         };
 
         if (client.manager.SupportedFilesystems && client.manager.CanResize) {
-            // We can't use Promise.all() here until cockpit is able to dispatch es2015 promises
-            // https://github.com/cockpit-project/cockpit/issues/10956
-            // eslint-disable-next-line cockpit/no-cockpit-all
-            return cockpit.all(client.manager.SupportedFilesystems.map(function (fs) {
-                return client.manager.CanFormat(fs).then(
-                    function (canformat_result) {
-                        info[fs] = {
-                            can_format: canformat_result[0],
-                            can_shrink: false,
-                            can_grow: false
-                        };
-                        return client.manager.CanResize(fs).then(
-                            function (canresize_result) {
+            return Promise.all(client.manager.SupportedFilesystems.map(fs =>
+                client.manager.CanFormat(fs).then(canformat_result => {
+                    info[fs] = {
+                        can_format: canformat_result[0],
+                        can_shrink: false,
+                        can_grow: false
+                    };
+                    return client.manager.CanResize(fs)
+                            .then(canresize_result => {
                                 // We assume that all filesystems support
                                 // offline shrinking/growing if they
                                 // support shrinking or growing at all.
@@ -489,23 +485,28 @@ function init_model(callback) {
                                     info[fs].can_grow = !!(canresize_result[1] & 4);
                                     info[fs].grow_needs_unmount = !(canresize_result[1] & 16);
                                 }
-                            },
-                            function () {
-                                // ignore unsupported filesystems
-                            });
-                    });
-            })).then(function () {
-                return info;
-            });
+                            })
+                            // ignore unsupported filesystems
+                            .catch(() => {});
+                }))
+            ).then(() => info);
         } else {
-            return cockpit.resolve(info);
+            return Promise.resolve(info);
         }
     }
 
     Promise.allSettled([client.manager.wait(),
         client.mdraids.wait(), client.vgroups.wait(), client.drives.wait(),
         client.blocks.wait(), client.blocks_ptable.wait(), client.blocks_lvm2.wait(), client.blocks_fsys.wait()
-    ]).then(() => {
+    ]).then(results => {
+        // we at least need the manager object; if it doesn't exist, wait for the next proxy onchanged
+        if (results[0].status !== 'fulfilled') {
+            console.warn("init_model(): udisks manager proxy failed:", JSON.stringify(results[0].reason));
+            client.features = false;
+            callback();
+            return;
+        }
+
         pull_time().then(function() {
             enable_features().then(function() {
                 query_fsys_info().then(function(fsys_info) {
@@ -841,7 +842,8 @@ client.init = function init_storaged(callback) {
                                         "/org/freedesktop/UDisks2/Manager", { watch: true });
 
     udisks_manager.wait().then(() => init_client(udisks_manager, callback))
-            .catch(() => {
+            .catch(ex => {
+                console.warn("client.init(): udisks manager proxy failed:", JSON.stringify(ex));
                 client.features = false;
                 callback();
             });

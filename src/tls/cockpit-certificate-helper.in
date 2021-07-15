@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 
 set -eu
 
@@ -68,7 +68,8 @@ EOF
 
 cmd_selfsign() {
     # Common variables used by both methods
-    local MACHINE_ID="$(tr -d -c '[:xdigit:]' < /etc/machine-id)"
+    local MACHINE_ID
+    MACHINE_ID="$(tr -d -c '[:xdigit:]' < /etc/machine-id)"
     local HOSTNAME="${HOSTNAME:-$(hostname)}"
     local CERTFILE="0-self-signed.cert"
     local KEYFILE="0-self-signed.key"
@@ -95,7 +96,7 @@ cmd_ipa_request() {
     kinit "${USER}@${REALM}" || exit 0
 
     # ensure this gets run with a non-C locale; ipa fails otherwise
-    if [ $(sh -c 'eval `locale`; echo $LC_CTYPE') = 'C' ]; then
+    if [ "$(sh -c 'eval `locale`; echo $LC_CTYPE')" = 'C' ]; then
         export LC_CTYPE=C.UTF-8
     fi
 
@@ -129,7 +130,8 @@ cmd_ipa_cleanup() {
 cmd_ipa() {
     local REALM="$2"
 
-    local HOST="$(hostname -f)"
+    local HOST
+    HOST="$(hostname -f)"
     local SERVICE="HTTP/${HOST}@${REALM}"
     local KEYTAB="${COCKPIT_CONFIG}/krb5.keytab"
 

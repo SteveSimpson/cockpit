@@ -24,7 +24,7 @@
 import "../lib/patternfly/patternfly-cockpit.scss";
 import "../lib/page.scss";
 import "@patternfly/patternfly/components/Button/button.css";
-import "../lib/listing.scss";
+import "../lib/table.css";
 
 /* eslint-disable indent,no-empty */
 
@@ -1453,30 +1453,6 @@ function factory() {
         var result = cockpit.defer();
         result.resolve(value);
         return result.promise.then(fulfilled, rejected, updated);
-    };
-
-    cockpit.all = function all(promises) { // eslint-disable-line cockpit/no-cockpit-all
-        var deferred = cockpit.defer();
-        var counter = 0;
-        var results = [];
-
-        if (arguments.length != 1 && !Array.isArray(promises))
-            promises = Array.prototype.slice.call(arguments);
-
-        promises.forEach(function(promise, key) {
-            counter++;
-            cockpit.when(promise).then(function(value) {
-                results[key] = value;
-                if (!(--counter))
-                    deferred.resolve.apply(deferred, results);
-            }, function(/* ... */) {
-                deferred.reject.apply(deferred, arguments);
-            });
-        });
-
-        if (counter === 0)
-            deferred.resolve(results);
-        return deferred.promise;
     };
 
     cockpit.resolve = function resolve(result) {
@@ -4338,14 +4314,13 @@ function factory() {
      */
 
     function check_superuser() {
-        var dfd = cockpit.defer();
-        var ch = cockpit.channel({ payload: "null", superuser: "require" });
-        ch.wait()
-            .then(function () { dfd.resolve(true) })
-            .fail(function () { dfd.resolve(false) })
-            .always(function () { ch.close() });
-
-        return dfd.promise();
+        return new Promise((resolve, reject) => {
+            const ch = cockpit.channel({ payload: "null", superuser: "require" });
+            ch.wait()
+                .then(() => resolve(true))
+                .catch(() => resolve(false))
+                .always(() => ch.close());
+        });
     }
 
     function Permission(options) {
@@ -4394,12 +4369,11 @@ function factory() {
         if (self.user && self.is_superuser !== null) {
             self.allowed = decide(self.user);
         } else {
-            // eslint-disable-next-line cockpit/no-cockpit-all
-            cockpit.all(cockpit.user(), check_superuser())
-                .done(function (user, is_superuser) {
+            Promise.all([cockpit.user(), check_superuser()])
+                .then(([user, is_superuser]) => {
                     self.user = user;
                     self.is_superuser = is_superuser;
-                    var allowed = decide(user);
+                    const allowed = decide(user);
                     if (self.allowed !== allowed) {
                         self.allowed = allowed;
                         maybe_reload();

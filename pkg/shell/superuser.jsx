@@ -19,7 +19,7 @@
 
 import cockpit from "cockpit";
 import React from "react";
-import { Button, FormSelect, FormSelectOption, Modal } from '@patternfly/react-core';
+import { Alert, Button, Modal } from '@patternfly/react-core';
 import { ModalError } from 'cockpit-components-inline-notification.jsx';
 import { host_superuser_storage_key } from './machines/machines';
 
@@ -27,66 +27,87 @@ import "form-layout.scss";
 
 const _ = cockpit.gettext;
 
-export function can_do_sudo(host) {
-    return cockpit.spawn(["sudo", "-v", "-n"], { err: "out", environ: ["LC_ALL=C"], host: host })
-            .then(() => true,
-                  (err, out) => !(err.exit_status == 1 && out.match("Sorry, user .+ may not run sudo on .+\\.")));
+function sudo_polish(msg) {
+    if (!msg)
+        return msg;
+
+    msg = msg.replace(/^\[sudo] /, "");
+    msg = msg[0].toUpperCase() + msg.slice(1);
+
+    return msg;
 }
 
 class UnlockDialog extends React.Component {
     render() {
         const { state } = this.props;
 
+        let title = null;
+        let title_icon = null;
         let body = null;
+        let footer = null;
+
         if (state.prompt) {
             if (!state.prompt.message && !state.prompt.prompt) {
                 state.prompt.message = _("Please authenticate to gain administrative access");
                 state.prompt.prompt = _("Password");
             }
-            body = <form className="ct-form" onSubmit={state.apply}>
-                { state.prompt.message && <span>{state.prompt.message}</span> }
-                { state.prompt.prompt && <label className="control-label">{state.prompt.prompt}</label> }
-                <input type={state.prompt.echo ? "text" : "password"} className="form-control" value={state.prompt.value}
-                       autoFocus
-                       onChange={event => {
-                           state.change(event.target.value);
-                       }} />
-            </form>;
-        } else if (state.method)
-            body = <form className="ct-form" onSubmit={state.apply}>
-                <label className="control-label" htmlFor="unlock-dialog-method">{_("Method")}</label>
-                <FormSelect value={state.method}
-                            id="unlock-dialog-method"
-                            onChange={state.change}>
-                    {state.methods.map(m => <FormSelectOption key={m} value={m} label={m} />)}
-                </FormSelect>
-            </form>;
-        else if (state.message)
-            body = <p>{state.message}</p>;
 
-        const footer = (
-            <>
-                { state.error && <ModalError dialogError={state.error} />}
-                { !state.message &&
-                <Button variant='primary' onClick={state.apply} isDisabled={state.busy}>
-                    {_("Authenticate")}
-                </Button>
-                }
-                <Button variant='link' className='btn-cancel' onClick={state.cancel} isDisabled={!state.cancel}>
-                    {state.message ? _("Close") : _("Cancel")}
-                </Button>
-                { state.busy &&
-                <div className="dialog-wait-ct">
-                    <div className="spinner spinner-sm" />
-                </div>
-                }
-            </>
-        );
+            title = _("Switch to administrative access");
+
+            body = (
+                <>
+                    { state.error && <><Alert variant={state.error_variant || 'danger'} isInline title={state.error} /><br /></> }
+                    <form className="ct-form"
+                          onSubmit={event => { state.apply(); event.preventDefault(); return false }}>
+                        { state.prompt.message && <span>{state.prompt.message}</span> }
+                        { state.prompt.prompt && <label className="control-label">{state.prompt.prompt}</label> }
+                        <input className="form-control" type={state.prompt.echo ? "text" : "password"}
+                               value={state.prompt.value}
+                               autoFocus
+                               disabled={state.busy}
+                               onChange={event => {
+                                   state.change(event.target.value);
+                               }} />
+                    </form>
+                </>);
+
+            footer = (
+                <>
+                    <Button variant='primary' onClick={state.apply} isDisabled={state.busy}>
+                        {_("Authenticate")}
+                    </Button>
+                    <Button variant='link' className='btn-cancel' onClick={state.cancel} isDisabled={!state.cancel}>
+                        {_("Cancel")}
+                    </Button>
+                    { state.busy &&
+                        <div className="dialog-wait-ct">
+                            <div className="spinner spinner-sm" />
+                        </div>
+                    }
+                </>);
+        } else if (state.message) {
+            title = _("Administrative access");
+            body = <p>{state.message}</p>;
+            footer = (
+                <Button variant="secondary" className='btn-cancel' onClick={state.cancel}>
+                    {_("Close")}
+                </Button>);
+        } else if (state.error) {
+            title_icon = "danger";
+            title = _("Problem becoming administrator");
+            body = <p>{state.error}</p>;
+            footer = (
+                <Button variant="secondary" className='btn-cancel' onClick={state.cancel}>
+                    {_("Close")}
+                </Button>);
+        }
+
         return (
             <Modal isOpen={!state.closed} position="top" variant="medium"
-                onClose={this.props.onClose}
-                title={_("Administrative access")}
-                footer={footer}>
+                   onClose={this.props.onClose}
+                   title={title}
+                   titleIconVariant={title_icon}
+                   footer={footer}>
                 {body}
             </Modal>);
     }
@@ -219,42 +240,42 @@ export class SuperuserDialogs extends React.Component {
         this.set_unlock_state(Object.assign(this.state.unlock_dialog_state, state));
     }
 
-    unlock(error) {
+    unlock() {
         this.superuser.Stop().always(() => {
-            can_do_sudo(this.props.host).then(can_do => {
-                if (!can_do)
-                    this.set_unlock_state({
-                        message: _("You can not gain administrative access."),
-                        cancel: () => this.set_unlock_state({ closed: true })
-                    });
-                else
-                    this.start("sudo", error);
-            });
+            this.start("sudo");
         });
     }
 
-    start(method, error) {
+    start(method) {
         const cancel = () => {
             this.superuser.Stop();
-            this.set_unlock_state({ busy: true, prompt: this.state.unlock_dialog_state.prompt });
+            this.set_unlock_state({
+                busy: true,
+                prompt: this.state.unlock_dialog_state.prompt,
+                error: this.state.unlock_dialog_state.error
+            });
         };
 
         this.set_unlock_state({
             busy: true,
-
-            error: error,
+            prompt: this.state.unlock_dialog_state.prompt,
             cancel: cancel
         });
 
         let did_prompt = false;
 
-        const onprompt = (event, message, prompt, def, echo) => {
-            did_prompt = true;
-            const p = { message: message, prompt: prompt, value: def, echo: echo };
+        const onprompt = (event, message, prompt, def, echo, error) => {
+            const p = {
+                message: sudo_polish(message),
+                prompt: sudo_polish(prompt),
+                value: def,
+                echo: echo
+            };
             this.set_unlock_state({
                 prompt: p,
 
-                error: this.state.unlock_dialog_state.error,
+                error: sudo_polish(error) || this.state.unlock_dialog_state.error,
+                error_variant: did_prompt ? 'danger' : 'warning',
                 change: val => {
                     p.value = val;
                     this.update_unlock_state({ prompt: p });
@@ -264,10 +285,12 @@ export class SuperuserDialogs extends React.Component {
                     this.superuser.Answer(p.value);
                     this.set_unlock_state({
                         busy: true,
+                        prompt: this.state.unlock_dialog_state.prompt,
                         cancel: cancel
                     });
                 }
             });
+            did_prompt = true;
         };
 
         this.superuser.addEventListener("Prompt", onprompt);
@@ -290,14 +313,10 @@ export class SuperuserDialogs extends React.Component {
                     console.warn(err);
                     this.superuser.removeEventListener("Prompt", onprompt);
                     if (err && err.message != "cancelled") {
-                        if (did_prompt)
-                            this.unlock(_("This didn't work, please try again"));
-                        else
-                            this.set_unlock_state({
-                                message: _("Something went wrong"),
-                                error: err.toString(),
-                                cancel: () => this.set_unlock_state({ closed: true })
-                            });
+                        this.set_unlock_state({
+                            error: sudo_polish(err.toString()),
+                            cancel: () => this.set_unlock_state({ closed: true })
+                        });
                     } else
                         this.set_unlock_state({ closed: true });
                 });

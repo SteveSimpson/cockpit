@@ -21,26 +21,25 @@ import cockpit from "cockpit";
 import React from "react";
 
 import {
-    Card, CardBody, CardTitle, CardHeader, CardActions,
+    Card, CardBody, CardTitle, CardHeader, CardActions, Checkbox,
+    Form, FormGroup,
     DataListItem, DataListItemRow, DataListItemCells, DataListCell, DataList,
-    Text, TextVariants
+    Text, TextVariants, TextInput as TextInputPF, Stack,
 } from "@patternfly/react-core";
 import { EditIcon, MinusIcon, PlusIcon, ExclamationTriangleIcon } from "@patternfly/react-icons";
 
 import sha1 from "js-sha1";
+import sha256 from "js-sha256";
 import stable_stringify from "json-stable-stringify-without-jsonify";
-
-import * as python from "python.js";
 
 import {
     dialog_open,
     SelectOneRadio, TextInput, PassInput, Skip
 } from "./dialog.jsx";
-import { decode_filename, block_name } from "./utils.js";
+import { array_find, decode_filename, block_name } from "./utils.js";
 import { fmt_to_fragments } from "./utilsx.jsx";
 import { StorageButton } from "./storage-controls.jsx";
 
-import luksmeta_monitor_hack_py from "raw-loader!./luksmeta-monitor-hack.py";
 import clevis_luks_passphrase_sh from "raw-loader!./clevis-luks-passphrase.sh";
 
 const _ = cockpit.gettext;
@@ -82,7 +81,10 @@ function compute_thp(jwk) {
     var req = REQUIRED_ATTRS[jwk.kty];
     var norm = { };
     req.forEach(k => { if (k in jwk) norm[k] = jwk[k]; });
-    return jwk_b64_encode(sha1.digest(stable_stringify(norm)));
+    return {
+        sha256: jwk_b64_encode(sha256.digest(stable_stringify(norm))),
+        sha1: jwk_b64_encode(sha1.digest(stable_stringify(norm)))
+    };
 }
 
 function compute_sigkey_thps(adv) {
@@ -109,22 +111,23 @@ function clevis_add(block, pin, cfg, passphrase) {
 }
 
 function clevis_remove(block, key) {
-    // HACK - only clevis version 10 brings "luks unbind", but it is important to use it
-    // when it exists because our fallback can't deal with all cases, such as LUKSv2.
-    // cryptsetup needs a terminal on stdin, even with -q or --key-file.
-    var script = 'if which clevis-luks-unbind; then clevis-luks-unbind -d "$0" -s "$1" -f; else cryptsetup luksKillSlot -q "$0" "$1" && luksmeta wipe -d "$0" -s "$1" -f; fi';
-    return cockpit.spawn(["/bin/sh", "-c", script, decode_filename(block.Device), key.slot],
-                         { superuser: true, err: "message", pty: true });
+    // clevis-luks-unbind needs a tty on stdin for some reason.
+    return cockpit.spawn(["clevis", "luks", "unbind", "-d", decode_filename(block.Device), "-s", key.slot, "-f"],
+                         { superuser: true, pty: true, err: "message" });
 }
 
-export function clevis_recover_passphrase(block) {
+export function clevis_recover_passphrase(block, just_type) {
     var dev = decode_filename(block.Device);
-    return cockpit.script(clevis_luks_passphrase_sh, [dev],
+    var args = [];
+    if (just_type)
+        args.push("--type");
+    args.push(dev);
+    return cockpit.script(clevis_luks_passphrase_sh, args,
                           { superuser: true, err: "message" })
             .then(output => output.trim());
 }
 
-/* Passphrase operations
+/* Passphrase and slot operations
  */
 
 function passphrase_add(block, new_passphrase, old_passphrase) {
@@ -139,19 +142,28 @@ function passphrase_change(block, key, new_passphrase, old_passphrase) {
                          { superuser: true, err: "message" }).input(old_passphrase + "\n" + new_passphrase + "\n");
 }
 
-function passphrase_remove(block, passphrase) {
-    var dev = decode_filename(block.Device);
-    return cockpit.spawn(["cryptsetup", "luksRemoveKey", dev],
-                         { superuser: true, err: "message" }).input(passphrase);
+function slot_remove(block, slot, passphrase) {
+    const dev = decode_filename(block.Device);
+    const opts = { superuser: true, err: "message" };
+    const cmd = ["cryptsetup", "luksKillSlot", dev, slot.toString()];
+    if (passphrase === false) {
+        cmd.splice(2, 0, "-q");
+        opts.pty = true;
+    }
+
+    const spawn = cockpit.spawn(cmd, opts);
+    if (passphrase !== false)
+        spawn.input(passphrase + "\n");
+
+    return spawn;
 }
 
-/* Generic slot operations
- */
-
-function slot_remove(block, slot) {
+function passphrase_test(block, passphrase) {
     var dev = decode_filename(block.Device);
-    return cockpit.spawn(["cryptsetup", "luksKillSlot", "-q", dev, slot.toString()],
-                         { superuser: true, err: "message", pty: true });
+    return (cockpit.spawn(["cryptsetup", "luksOpen", "--test-passphrase", dev],
+                          { superuser: true, err: "message" }).input(passphrase)
+            .then(() => true)
+            .catch(() => false));
 }
 
 /* Dialogs
@@ -169,18 +181,50 @@ export function existing_passphrase_fields(explanation) {
     ];
 }
 
-export function get_existing_passphrase(dlg, block) {
-    const prom = clevis_recover_passphrase(block).then(passphrase => {
-        if (passphrase == "") {
+function get_stored_passphrase(block, just_type) {
+    const pub_config = array_find(block.Configuration, function (c) { return c[0] == "crypttab" });
+    if (pub_config && pub_config[1]["passphrase-path"] && decode_filename(pub_config[1]["passphrase-path"].v) != "") {
+        if (just_type)
+            return Promise.resolve("stored");
+        return block.GetSecretConfiguration({}).then(function (items) {
+            for (var i = 0; i < items.length; i++) {
+                if (items[i][0] == 'crypttab' && items[i][1]['passphrase-contents'])
+                    return decode_filename(items[i][1]['passphrase-contents'].v);
+            }
+            return "";
+        });
+    }
+}
+
+export function get_existing_passphrase(block, just_type) {
+    return clevis_recover_passphrase(block, just_type).then(passphrase => {
+        return passphrase || get_stored_passphrase(block, just_type);
+    });
+}
+
+export function get_existing_passphrase_for_dialog(dlg, block, just_type) {
+    const prom = get_existing_passphrase(block, just_type).then(passphrase => {
+        if (!passphrase)
             dlg.set_values({ needs_explicit_passphrase: true });
-            return null;
-        } else {
-            return passphrase;
-        }
+        return passphrase;
     });
 
     dlg.run(_("Unlocking disk..."), prom);
     return prom;
+}
+
+export function request_passphrase_on_error_handler(dlg, vals, recovered_passphrase, block) {
+    return function (error) {
+        if (vals.passphrase === undefined) {
+            return (passphrase_test(block, recovered_passphrase)
+                    .then(good => {
+                        if (!good)
+                            dlg.set_values({ needs_explicit_passphrase: true });
+                        return Promise.reject(error);
+                    }));
+        } else
+            return Promise.reject(error);
+    };
 }
 
 function parse_url(url) {
@@ -255,7 +299,7 @@ function add_dialog(client, block) {
         }
     });
 
-    get_existing_passphrase(dlg, block).then(pp => { recovered_passphrase = pp });
+    get_existing_passphrase_for_dialog(dlg, block).then(pp => { recovered_passphrase = pp });
 }
 
 function edit_passphrase_dialog(block, key) {
@@ -300,100 +344,77 @@ function edit_clevis_dialog(client, block, key) {
         }
     });
 
-    get_existing_passphrase(dlg, block).then(pp => { recovered_passphrase = pp });
-}
-
-class Revealer extends React.Component {
-    constructor() {
-        super();
-        this.state = { revealed: false };
-    }
-
-    render() {
-        if (this.state.revealed)
-            return <div>{this.props.children}</div>;
-        else
-            return (
-                <button className="button-link" onClick={event => { if (event.button == 0) this.setState({ revealed: true }); }}>
-                    {this.props.summary}
-                </button>
-            );
-    }
+    get_existing_passphrase_for_dialog(dlg, block).then(pp => { recovered_passphrase = pp });
 }
 
 function edit_tang_adv(client, block, key, url, adv, passphrase) {
     var parsed = parse_url(url);
     var cmd = cockpit.format("ssh $0 tang-show-keys $1", parsed.hostname, parsed.port);
-    var cmd_alt = cockpit.format("ssh $0 \"curl -s localhost:$1/adv |\n  jose fmt -j- -g payload -y -o- |\n  jose jwk use -i- -r -u verify -o- |\n  jose jwk thp -i-\"", parsed.hostname, parsed.port);
 
     var sigkey_thps = compute_sigkey_thps(tang_adv_payload(adv));
 
-    dialog_open({
+    const dlg = dialog_open({
         Title: _("Verify key"),
         Body: (
             <div>
-                <div>{_("Make sure the key hash from the Tang server matches:")}</div>
-                { sigkey_thps.map(s => <div key={s} className="sigkey-hash">{s}</div>) }
+                <div>{_("Make sure the key hash from the Tang server matches one of the following:")}</div>
+                <br />
+                <div>{_("SHA256")}</div>
+                { sigkey_thps.map(s => <div key={s} className="sigkey-hash">{s.sha256}</div>) }
+                <br />
+                <div>{_("SHA1")}</div>
+                { sigkey_thps.map(s => <div key={s} className="sigkey-hash">{s.sha1}</div>) }
                 <br />
                 <div>{_("Manually check with SSH: ")}<pre className="inline-pre">{cmd}</pre></div>
-                <br />
-                <Revealer summary={_("What if tang-show-keys is not available?")}>
-                    <p>{_("If tang-show-keys is not available, run the following:")}</p>
-                    <pre>{cmd_alt}</pre>
-                </Revealer>
             </div>
         ),
+        Fields: existing_passphrase_fields(_("Saving a new passphrase requires unlocking the disk. Please provide a current disk passphrase.")),
         Action: {
             Title: _("Trust key"),
-            action: function () {
-                return clevis_add(block, "tang", { url: url, adv: adv }, passphrase).then(() => {
+            action: function (vals) {
+                return clevis_add(block, "tang", { url: url, adv: adv }, vals.passphrase || passphrase).then(() => {
                     if (key)
                         return clevis_remove(block, key);
-                });
+                })
+                        .catch(request_passphrase_on_error_handler(dlg, vals, passphrase, block));
             }
         }
     });
 }
 
 const RemovePassphraseField = (tag, key, dev) => {
+    function validate(val) {
+        if (val === "")
+            return _("Passphrase can not be empty");
+    }
+
     return {
         tag: tag,
-        title: <ExclamationTriangleIcon className="ct-icon-exclamation-triangle" size="lg" />,
-        options: { },
+        title: null,
+        options: { validate: validate },
         initial_value: "",
+        bare: true,
 
-        render: (val, change) => {
-            const key_slot = cockpit.format(_("key slot $0"), key.slot);
+        render: (val, change, validated, error) => {
             return (
-                <div data-field={tag}>
-                    <h3>
-                        { fmt_to_fragments(_("Remove passphrase in $0?"), <b>{key_slot}</b>) }
-                    </h3>
+                <Stack hasGutter>
                     <p>{ fmt_to_fragments(_("Passphrase removal may prevent unlocking $0."), <b>{dev}</b>) }</p>
-
-                    <div name="remove-passphrase" className="progressive-disclosure ct-form">
-                        <div className="form-group">
-                            <label>
-                                <input type="radio" checked={val !== false}
-                                       autoFocus
-                                       onChange={event => change("")} />
-                                {_("Confirm removal with passphrase")}
-                            </label>
-                            <input className="form-control" type="password" hidden={val === false}
-                                   value={val} onChange={event => change(event.target.value)} />
-                        </div>
-                        <div className="form-group">
-                            <label>
-                                <input type="radio" checked={val === false}
-                                       onChange={event => change(false)} />
-                                { fmt_to_fragments(_("Force remove passphrase in $0"), <b>{key_slot}</b>) }
-                            </label>
-                            <p className="slot-warning" hidden={val !== false}>
-                                Removing a passphrase without confirmation can be dangerous.
-                            </p>
-                        </div>
-                    </div>
-                </div>
+                    <Form>
+                        <Checkbox id="force-remove-passphrase"
+                                  isChecked={val !== false}
+                                  label={_("Confirm removal with an alternate passphrase")}
+                                  onChange={checked => change(checked ? "" : false)}
+                                  body={val === false
+                                      ? <p className="slot-warning">
+                                          {_("Removing a passphrase without confirmation of another passphrase may prevent unlocking or key management, if other passphrases are forgotten or lost.")}
+                                      </p>
+                                      : <FormGroup label={_("Passphrase from any other key slot")} fieldId="remove-passphrase">
+                                          <TextInputPF id="remove-passphrase" type="password" value={val} onChange={value => change(value)} />
+                                      </FormGroup>
+                                  }
+                        />
+                    </Form>
+                </Stack>
             );
         }
     };
@@ -401,18 +422,16 @@ const RemovePassphraseField = (tag, key, dev) => {
 
 function remove_passphrase_dialog(block, key) {
     dialog_open({
-        Title: _("Remove passphrase"),
+        Title: <><ExclamationTriangleIcon className="ct-icon-exclamation-triangle" /> {cockpit.format(_("Remove passphrase in key slot $0"), key.slot)}</>,
         Fields: [
             RemovePassphraseField("passphrase", key, block_name(block))
         ],
+        isFormHorizontal: false,
         Action: {
             DangerButton: true,
             Title: _("Remove"),
             action: function (vals) {
-                if (vals.passphrase === false)
-                    return slot_remove(block, key.slot);
-                else
-                    return passphrase_remove(block, vals.passphrase);
+                return slot_remove(block, key.slot, vals.passphrase);
             }
         }
     });
@@ -421,15 +440,16 @@ function remove_passphrase_dialog(block, key) {
 const RemoveClevisField = (tag, key, dev) => {
     return {
         tag: tag,
-        title: <ExclamationTriangleIcon className="ct-icon-exclamation-triangle" size="lg" />,
+        title: null,
         options: { },
         initial_value: "",
+        bare: true,
 
         render: (val, change) => {
             return (
                 <div data-field={tag}>
-                    <h3>{ fmt_to_fragments(_("Remove $0?"), <b>{key.url}</b>) }</h3>
-                    <p>{ fmt_to_fragments(_("Keyserver removal may prevent unlocking $0."), <b>{dev}</b>) }</p>
+                    <p>{ fmt_to_fragments(_("Remove $0?"), <b>{key.url}</b>) }</p>
+                    <p className="slot-warning">{ fmt_to_fragments(_("Keyserver removal may prevent unlocking $0."), <b>{dev}</b>) }</p>
                 </div>
             );
         }
@@ -438,7 +458,7 @@ const RemoveClevisField = (tag, key, dev) => {
 
 function remove_clevis_dialog(client, block, key) {
     dialog_open({
-        Title: _("Remove Tang keyserver"),
+        Title: <><ExclamationTriangleIcon className="ct-icon-exclamation-triangle" /> {_("Remove Tang keyserver")}</>,
         Fields: [
             RemoveClevisField("keyserver", key, block_name(block))
         ],
@@ -453,54 +473,13 @@ function remove_clevis_dialog(client, block, key) {
 }
 
 export class CryptoKeyslots extends React.Component {
-    constructor() {
-        super();
-        // Initialize for LUKSv1 and set max_slots to 8.
-        this.state = { luks_version: 1, slots: null, slot_error: null, max_slots: 8 };
-    }
-
-    monitor_slots(block) {
-        // HACK - we only need this until UDisks2 has a Encrypted.Slots property or similar.
-        if (block != this.monitored_block) {
-            if (this.monitored_block)
-                this.monitor_channel.close();
-            this.monitored_block = block;
-            if (block) {
-                var dev = decode_filename(block.Device);
-                this.monitor_channel = python.spawn(luksmeta_monitor_hack_py, [dev], { superuser: true });
-                var buf = "";
-                this.monitor_channel.stream(output => {
-                    var lines;
-                    buf += output;
-                    lines = buf.split("\n");
-                    buf = lines[lines.length - 1];
-                    if (lines.length >= 2) {
-                        const data = JSON.parse(lines[lines.length - 2]);
-                        this.setState({ slots: data.slots, luks_version: data.version, max_slots: data.max_slots });
-                    }
-                });
-                this.monitor_channel.fail(err => {
-                    this.setState({ slots: [], slot_error: err });
-                });
-            }
-        }
-    }
-
-    componentWillUnmount() {
-        this.monitor_slots(null);
-    }
-
     render() {
-        var client = this.props.client;
-        var block = this.props.block;
+        var { client, block, slots, slot_error, max_slots } = this.props;
 
         if (!client.features.clevis)
             return null;
 
-        this.monitor_slots(block);
-
-        if ((this.state.slots == null && this.state.slot_error == null) ||
-            this.state.slot_error == "not-found")
+        if ((slots == null && slot_error == null) || slot_error == "not-found")
             return null;
 
         function decode_clevis_slot(slot) {
@@ -527,16 +506,16 @@ export class CryptoKeyslots extends React.Component {
             }
         }
 
-        var keys = this.state.slots.map(decode_clevis_slot).filter(k => !!k);
+        var keys = slots ? slots.map(decode_clevis_slot).filter(k => !!k) : [];
 
         var rows;
         if (keys.length == 0) {
             var text;
-            if (this.state.slot_error) {
-                if (this.state.slot_error.problem == "access-denied")
+            if (slot_error) {
+                if (slot_error.problem == "access-denied")
                     text = _("The currently logged in user is not permitted to see information about keys.");
                 else
-                    text = this.state.slot_error.toString();
+                    text = slot_error.toString();
             } else {
                 text = _("No keys added");
             }
@@ -562,7 +541,7 @@ export class CryptoKeyslots extends React.Component {
                                     <DataListCell key="text-right" isFilled={false} alignRight>
                                         <StorageButton onClick={edit}
                                                        ariaLabel={_("Edit")}
-                                                       excuse={(keys.length == this.state.max_slots)
+                                                       excuse={(keys.length == max_slots)
                                                            ? _("Editing a key requires a free slot")
                                                            : null}>
                                             <EditIcon />
@@ -601,7 +580,7 @@ export class CryptoKeyslots extends React.Component {
             });
         }
 
-        const remaining = this.state.max_slots - keys.length;
+        const remaining = max_slots - keys.length;
 
         return (
             <Card className="key-slot-panel">
@@ -612,7 +591,7 @@ export class CryptoKeyslots extends React.Component {
                         </span>
                         <StorageButton onClick={() => add_dialog(client, block)}
                                        ariaLabel={_("Add")}
-                                       excuse={(keys.length == this.state.max_slots)
+                                       excuse={(keys.length == max_slots)
                                            ? _("No free key slots")
                                            : null}>
                             <PlusIcon />

@@ -22,7 +22,9 @@ import QUnit from "qunit-tests";
 
 QUnit.test("format_delay", function (assert) {
     var checks = [
-        [15550000, "4 hours"]
+        [3000, "less than a minute"],
+        [60000, "1 minute"],
+        [15550000, "about 4 hours"],
     ];
 
     assert.expect(checks.length);
@@ -67,9 +69,15 @@ QUnit.test("mdraid_name_remote", function (assert) {
     utils.mock_hostnamed(null);
 });
 
-QUnit.test("mdraid_name_local", function (assert) {
+QUnit.test("mdraid_name_local_static", function (assert) {
     utils.mock_hostnamed({ StaticHostname: "sweethome" });
-    assert.strictEqual(utils.mdraid_name({ Name: "sweethome:mydev" }), "mydev", "expected name for local host");
+    assert.strictEqual(utils.mdraid_name({ Name: "sweethome:mydev" }), "mydev", "expected name for static local host");
+    utils.mock_hostnamed(null);
+});
+
+QUnit.test("mdraid_name_local_transient", function (assert) {
+    utils.mock_hostnamed({ Hostname: "sweethome" });
+    assert.strictEqual(utils.mdraid_name({ Name: "sweethome:mydev" }), "mydev", "expected name for transient local host");
     utils.mock_hostnamed(null);
 });
 

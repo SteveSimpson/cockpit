@@ -23,7 +23,7 @@ import { superuser } from "superuser";
 import { Form, FormGroup, TextInput } from '@patternfly/react-core';
 
 import { has_errors } from "./dialog-utils.js";
-import { show_modal_dialog } from "cockpit-components-dialog.jsx";
+import { show_modal_dialog, apply_modal_dialog } from "cockpit-components-dialog.jsx";
 import { password_quality, PasswordFormFields } from "cockpit-components-password.jsx";
 
 const _ = cockpit.gettext;
@@ -136,7 +136,7 @@ function SetPasswordDialogBody({ state, errors, change }) {
     } = state;
 
     return (
-        <Form isHorizontal>
+        <Form isHorizontal onSubmit={apply_modal_dialog}>
             { need_old &&
             <FormGroup label={_("Old password")}
                        helperTextInvalid={errors && errors.password_old}
@@ -206,6 +206,9 @@ export function set_password_dialog(account, current_user) {
 
         if (state.password != state.password_confirm)
             errors.password_confirm = _("The passwords do not match");
+
+        if (state.password.length > 256)
+            errors.password = _("Password is longer than 256 characters");
 
         return password_quality(state.password, force)
                 .catch(ex => {

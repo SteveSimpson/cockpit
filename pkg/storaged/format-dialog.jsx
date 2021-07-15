@@ -129,6 +129,15 @@ export function initial_mount_options(client, block) {
     return initial_tab_options(client, block, true);
 }
 
+function teardown_and_format_title(usage) {
+    if (usage.Teardown && usage.Teardown.Mounts)
+        return _("Unmount and format");
+    else if (usage.Teardown && (usage.Teardown.PhysicalVolumes || usage.Teardown.MDRaidMembers))
+        return _("Remove and format");
+    else
+        return _("Format");
+}
+
 export function format_dialog(client, path, start, size, enable_dos_extended) {
     var block = client.blocks[path];
     var block_ptable = client.blocks_ptable[path];
@@ -145,10 +154,6 @@ export function format_dialog(client, path, start, size, enable_dos_extended) {
         return vals.type != "empty" && vals.type != "dos-extended";
     }
 
-    function is_encrypted(vals) {
-        return vals.crypto.on;
-    }
-
     function add_fsys(storaged_name, entry) {
         if (storaged_name === true ||
             (client.fsys_info && client.fsys_info[storaged_name] && client.fsys_info[storaged_name].can_format)) {
@@ -157,13 +162,31 @@ export function format_dialog(client, path, start, size, enable_dos_extended) {
     }
 
     var filesystem_options = [];
-    add_fsys("xfs", { value: "xfs", title: "XFS - " + _("Recommended default") });
+    add_fsys("xfs", { value: "xfs", title: "XFS " + _("(recommended)") });
     add_fsys("ext4", { value: "ext4", title: "EXT4" });
     add_fsys("vfat", { value: "vfat", title: "VFAT" });
     add_fsys("ntfs", { value: "ntfs", title: "NTFS" });
     add_fsys(true, { value: "empty", title: _("No filesystem") });
     if (create_partition && enable_dos_extended)
         add_fsys(true, { value: "dos-extended", title: _("Extended partition") });
+
+    function is_encrypted(vals) {
+        return vals.crypto !== "none";
+    }
+
+    function add_crypto_type(value, title, recommended) {
+        if ((client.manager.SupportedEncryptionTypes && client.manager.SupportedEncryptionTypes.indexOf(value) != -1) ||
+            value == "luks1") {
+            crypto_types.push({
+                value: value,
+                title: title + (recommended ? " " + _("(recommended)") : "")
+            });
+        }
+    }
+
+    var crypto_types = [{ value: "none", title: _("No encryption") }];
+    add_crypto_type("luks1", "LUKS1", false);
+    add_crypto_type("luks2", "LUKS2", true);
 
     var usage = utils.get_active_usage(client, create_partition ? null : path);
 
@@ -189,6 +212,13 @@ export function format_dialog(client, path, start, size, enable_dos_extended) {
         Title: title,
         Footer: TeardownMessage(usage),
         Fields: [
+            TextInput("name", _("Name"),
+                      {
+                          validate: (name, vals) => utils.validate_fsys_label(name, vals.type),
+                          visible: is_filesystem
+                      }),
+            SelectOne("type", _("Type"),
+                      { choices: filesystem_options }),
             SizeSlider("size", _("Size"),
                        {
                            value: size,
@@ -197,44 +227,12 @@ export function format_dialog(client, path, start, size, enable_dos_extended) {
                                return create_partition;
                            }
                        }),
-            SelectOne("erase", _("Erase"),
-                      {
-                          choices: [
-                              { value: "no", title: _("Don't overwrite existing data") },
-                              { value: "zero", title: _("Overwrite existing data with zeros") }
-                          ]
-                      }),
-            SelectOne("type", _("Type"),
-                      { choices: filesystem_options }),
-            TextInput("name", _("Name"),
-                      {
-                          validate: (name, vals) => utils.validate_fsys_label(name, vals.type),
-                          visible: is_filesystem
-                      }),
-            CheckBoxes("crypto", "",
+            CheckBoxes("erase", _("Erase"),
                        {
                            fields: [
-                               { tag: "on", title: _("Encrypt data") }
-                           ]
+                               { tag: "on", title: _("Overwrite existing data with zeros") }
+                           ],
                        }),
-            [
-                PassInput("passphrase", _("Passphrase"),
-                          {
-                              validate: function (phrase) {
-                                  if (phrase === "")
-                                      return _("Passphrase cannot be empty");
-                              },
-                              visible: is_encrypted
-                          }),
-                PassInput("passphrase2", _("Confirm"),
-                          {
-                              validate: function (phrase2, vals) {
-                                  if (phrase2 != vals.passphrase)
-                                      return _("Passphrases do not match");
-                              },
-                              visible: is_encrypted
-                          })
-            ].concat(crypto_options_dialog_fields(crypto_options, is_encrypted, true, true)),
             TextInput("mount_point", _("Mount point"),
                       {
                           visible: is_filesystem,
@@ -254,8 +252,28 @@ export function format_dialog(client, path, start, size, enable_dos_extended) {
                                { title: _("Mount read only"), tag: "ro" },
                                { title: _("Custom mount options"), tag: "extra", type: "checkboxWithInput" },
                            ]
-                       },
-            ),
+                       }),
+            SelectOne("crypto", _("Encryption"),
+                      { choices: crypto_types }),
+            [
+                PassInput("passphrase", _("Passphrase"),
+                          {
+                              validate: function (phrase) {
+                                  if (phrase === "")
+                                      return _("Passphrase cannot be empty");
+                              },
+                              visible: is_encrypted
+                          }),
+                PassInput("passphrase2", _("Confirm"),
+                          {
+                              validate: function (phrase2, vals) {
+                                  if (phrase2 != vals.passphrase)
+                                      return _("Passphrases do not match");
+                              },
+                              visible: is_encrypted
+                          })
+            ].concat(crypto_options_dialog_fields(crypto_options, is_encrypted, true, true)),
+
         ],
         update: function (dlg, vals, trigger) {
             if (trigger == "crypto_options" && vals.crypto_options.ro == true)
@@ -264,15 +282,15 @@ export function format_dialog(client, path, start, size, enable_dos_extended) {
                 dlg.set_nested_values("crypto_options", { ro: false });
         },
         Action: {
-            Title: create_partition ? _("Create partition") : _("Format"),
+            Title: create_partition ? _("Create partition") : teardown_and_format_title(usage),
             Danger: (create_partition ? null : _("Formatting a storage device will erase all data on it.")),
             wrapper: job_progress_wrapper(client, block.path),
             action: function (vals) {
                 var options = {
                     'tear-down': { t: 'b', v: true }
                 };
-                if (vals.erase != "no")
-                    options.erase = { t: 's', v: vals.erase };
+                if (vals.erase.on)
+                    options.erase = { t: 's', v: "zero" };
                 if (vals.name)
                     options.label = { t: 's', v: vals.name };
 
@@ -284,6 +302,7 @@ export function format_dialog(client, path, start, size, enable_dos_extended) {
                 var config_items = [];
                 if (is_encrypted(vals)) {
                     options["encrypt.passphrase"] = { t: 's', v: vals.passphrase };
+                    options["encrypt.type"] = { t: 's', v: vals.crypto };
 
                     var item = {
                         options: { t: 'ay', v: utils.encode_filename(crypto_options_dialog_options(vals)) },
@@ -342,22 +361,24 @@ export function format_dialog(client, path, start, size, enable_dos_extended) {
                     }
                 }
 
-                function block_fsys_for_block() {
-                    return (client.blocks_fsys[block.path] ||
-                            (client.blocks_cleartext[block.path] &&
-                             client.blocks_fsys[client.blocks_cleartext[block.path].path]));
+                function block_fsys_for_block(path) {
+                    return (client.blocks_fsys[path] ||
+                            (client.blocks_cleartext[path] &&
+                             client.blocks_fsys[client.blocks_cleartext[path].path]));
                 }
 
-                function maybe_mount() {
+                function maybe_mount(new_path) {
+                    const path = new_path || block.path;
                     if (is_filesystem(vals) && vals.mount_options.auto)
-                        return client.wait_for(block_fsys_for_block).then(block_fsys => block_fsys.Mount({ }));
+                        return (client.wait_for(() => block_fsys_for_block(path))
+                                .then(block_fsys => block_fsys.Mount({ })));
                 }
 
                 return utils.teardown_active_usage(client, usage)
                         .then(utils.reload_systemd)
                         .then(format)
-                        .then(maybe_mount)
-                        .then(utils.reload_systemd);
+                        .then(new_path => utils.reload_systemd().then(() => new_path))
+                        .then(maybe_mount);
             }
         }
     });

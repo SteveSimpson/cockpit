@@ -19,7 +19,6 @@
 
 import cockpit from "cockpit";
 import React from "react";
-import moment from "moment";
 import {
     Alert,
     Card, CardHeader, CardTitle, CardBody, CardActions,
@@ -31,6 +30,7 @@ import {
 } from "@patternfly/react-core";
 import { dialog_open, TeardownMessage, TextInput, ComboBox, CheckBoxes } from "./dialog.jsx";
 import * as format from "./format-dialog.jsx";
+import { format_delay } from "./utils.js";
 
 import { StdDetailsLayout } from "./details.jsx";
 import { StorageButton, StorageUsageBar } from "./storage-controls.jsx";
@@ -48,7 +48,7 @@ function nfs_busy_dialog(client, dialog_title, entry, error, action_title, actio
             const sessions = [];
             const services = [];
             users.forEach((u) => {
-                var since = moment.duration(-u.since * 1000).humanize(true);
+                const since = format_delay(-u.since * 1000);
                 if (u.unit.endsWith(".scope")) {
                     sessions.push({ Name: u.desc, Command: u.cmd.substr(0, 200), Since: since });
                 } else {
@@ -324,7 +324,7 @@ export class NFSDetails extends React.Component {
                     </CardActions>
                 </CardHeader>
                 <CardBody>
-                    <DescriptionList isHorizontal>
+                    <DescriptionList className="pf-m-horizontal-on-sm">
                         <DescriptionListGroup>
                             <DescriptionListTerm className="control-DescriptionListTerm">{_("Server")}</DescriptionListTerm>
                             <DescriptionListDescription>{entry.fields[0]}</DescriptionListDescription>
@@ -337,9 +337,9 @@ export class NFSDetails extends React.Component {
 
                         <DescriptionListGroup>
                             <DescriptionListTerm className="control-DescriptionListTerm">{_("Size")}</DescriptionListTerm>
-                            <DescriptionListDescription>
+                            <DescriptionListDescription className="pf-u-align-self-center">
                                 { entry.mounted
-                                    ? <StorageUsageBar stats={fsys_size} critical={0.95} />
+                                    ? <StorageUsageBar stats={fsys_size} critical={0.95} block={entry.fields[1]} />
                                     : "--"
                                 }
                             </DescriptionListDescription>

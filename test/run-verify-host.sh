@@ -22,7 +22,11 @@ rpm -q cockpit-system
 # HACK: chromium-headless ought to be enough, but version 88 has a crash: https://bugs.chromium.org/p/chromium/issues/detail?id=1170634
 if ! rpm -q chromium; then
     if grep -q 'ID=.*rhel' /etc/os-release; then
+        # There is no EPEL for RHEL 9 yet, force 8
+        # RHEL 9 has a broken stub epel.repo
+        rm -f /etc/yum.repos.d/epel.repo
         dnf install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-8.noarch.rpm
+        sed -i 's/$releasever/8/' /etc/yum.repos.d/epel*.repo
         dnf config-manager --enable epel
     fi
     dnf install -y chromium
@@ -56,7 +60,7 @@ if ! id runtest 2>/dev/null; then
     useradd -c 'Test runner' runtest
     # allow test to set up things on the machine
     mkdir -p /root/.ssh
-    curl https://raw.githubusercontent.com/cockpit-project/bots/master/machine/identity.pub  >> /root/.ssh/authorized_keys
+    curl https://raw.githubusercontent.com/cockpit-project/bots/main/machine/identity.pub  >> /root/.ssh/authorized_keys
     chmod 600 /root/.ssh/authorized_keys
 fi
 chown -R runtest "$SOURCE"

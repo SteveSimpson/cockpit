@@ -5,21 +5,10 @@
  * lists all dependencies, inputs, outputs, and installable files
  */
 
-function fatal(message, code) {
-    console.log("webpack-make: " + message);
-    process.exit(code || 1);
-}
-
-var webpack, path, stdio, fs;
-
-try {
-    webpack = require("webpack");
-    path = require("path");
-    stdio = require("stdio");
-    fs = require("fs");
-} catch(ex) {
-    fatal(ex.message, 127); /* missing looks for this */
-}
+const webpack = require("webpack");
+const path = require("path");
+const stdio = require("stdio");
+const fs = require("fs");
 
 var ops = stdio.getopt({
     config: { key: "c", args: 1, description: "Path to webpack.config.js", default: "webpack.config.js" },
@@ -27,25 +16,16 @@ var ops = stdio.getopt({
     watch: { key: "w", args: 0, description: "Enable webpack watch mode" },
 });
 
-var srcdir = process.env.SRCDIR || ".";
-var makefile = ops.deps;
-var prefix = "packages";
-var npm = { "dependencies": { } };
+const makefile = ops.deps;
+const prefix = makefile.split("/").slice(-2, -1)[0];
+process.env["ONLYDIR"] = prefix + "/";
 
-if (makefile) {
-    prefix = makefile.split("/").slice(-2, -1)[0];
-    process.env["ONLYDIR"] = prefix + "/";
-    npm = JSON.parse(fs.readFileSync(path.join(srcdir, "package.json"), "utf8"));
-}
+const srcdir = (process.env.SRCDIR || ".").replace(/\/$/, '');
+const cwd = process.cwd();
+const config_path = path.resolve(cwd, ops.config);
+const config = require(config_path);
 
-var cwd = process.cwd();
-var config_path = path.resolve(cwd, ops.config);
-var config = require(config_path);
-
-// The latest input file time updated and used below
-var latest = fs.statSync(config_path).mtime;
-
-compiler = webpack(config);
+const compiler = webpack(config);
 
 if (ops.watch) {
     compiler.hooks.watchRun.tap("WebpackInfo", compilation => {
@@ -86,87 +66,65 @@ function process_result(err, stats) {
 }
 
 function generateDeps(makefile, stats) {
+    const stampfile = path.dirname(makefile) + '/manifest.json';
+    const dir = path.relative('', stats.compilation.outputOptions.path);
+    const now = Math.floor(Date.now() / 1000);
 
-    // Note that these are cheap ways of doing a set
-    var inputs = { };
-    var outputs = { };
-    var installs = { };
-    var tests = { };
+    const inputs = new Set();
+    for (const file of stats.compilation.fileDependencies) {
+        // node modules  are handled by the dependency on package-lock.json
+        if (file.includes('/node_modules/'))
+            continue;
 
-    var pkgdir = path.dirname(makefile);
-    var stampfile = pkgdir + '/manifest.json';
+        // Webpack 5 includes directories: https://github.com/webpack/webpack/issues/11971
+        if (fs.lstatSync(file).isDirectory())
+            continue;
 
-    stats.compilation.modules.forEach(function(module) {
-        // skip external, multi, and other "not quite" modules
-        if (module.constructor.name !== 'NormalModule')
-            return;
-        var parts = module.identifier().split("!");
-        parts.concat(module.fileDependencies || []).forEach(function(part) {
-            var input = part.split("?")[0];
-            maybePushInput(inputs, input);
-        });
-    });
+        inputs.add(path.relative(srcdir, file));
+    }
 
-    stats.compilation.fileDependencies.forEach(function(file) {
-        maybePushInput(inputs, file);
-    });
+    const uncompressed_patterns = [
+        '/manifest.json$', '/override.json$',
+        '^dist/static/', // cockpit-ws cannot currently serve compressed login page
+        '^dist/shell/index.html$',  // COMPAT: Support older cockpit-ws binaries. See #14673
+        '\.png$', '\.woff$', '\.woff2$', '\.gif$'
+    ].map((r) => new RegExp(r));
 
-    // All the dependent files
-    var asset, output;
-    var now = Math.floor(Date.now() / 1000);
-
-    // Strip builddir from output paths
-    var dir = stats.compilation.outputOptions.path;
-    if (dir.indexOf(cwd) === 0)
-        dir = dir.substr(cwd.length+1);
-
-    for(asset in stats.compilation.assets) {
-        output = path.join(dir, asset);
+    const outputs = new Set();
+    const installs = new Set();
+    const gz_installs = new Set();
+    const tests = new Set();
+    for (const asset in stats.compilation.assets) {
+        const output = path.join(dir, asset);
         fs.utimesSync(output, now, now);
 
         if (!output.endsWith("/manifest.json") && !output.endsWith(".map"))
-            outputs[output] = output;
+            outputs.add(output);
 
-	if (output.indexOf("/test-") !== -1 && output.endsWith(".html")) {
-            tests[output] = output;
+        if (output.includes("/test-")) {
+            if (output.endsWith(".html")) {
+                tests.add(output);
+            }
             continue;
         }
 
-        var install = output;
-	if (!output.endsWith("manifest.json") &&
-            !output.endsWith("override.json") &&
-            // COMPAT: Support older cockpit-ws binaries. See #14673
-            !output.endsWith("shell/index.html") &&
-            // cockpit-ws cannot currently serve compressed login page
-            output.indexOf("static/login") < 0 &&
-            output.indexOf("static/po.") < 0 &&
-            !output.endsWith(".png") &&
-            !output.endsWith(".map") &&
-            !output.endsWith(".ttf") &&
-            !output.endsWith(".woff") &&
-            !output.endsWith(".woff2") &&
-            !output.endsWith(".gif")) {
-            install += ".gz";
-        }
+        if (output.endsWith(".map") || output.includes("included-modules"))
+            continue;
 
-        // Debug output and tests gets installed separately
-        if (!output.endsWith(".map") && output.indexOf("/test-") === -1 && !output.includes("included-modules"))
-            installs[install] = install;
+        if (uncompressed_patterns.some((s) => output.match(s))) {
+            installs.add(output);
+        } else {
+            gz_installs.add(output);
+        }
     }
 
-    // Finalize all the sets into arrays
-    inputs = Object.keys(inputs).sort();
-    outputs = Object.keys(outputs).sort();
-    installs = Object.keys(installs).sort();
-    tests = Object.keys(tests).sort();
+    const lines = [ "# Generated Makefile data for " + prefix ];
 
-    var lines = [ "# Generated Makefile data for " + prefix, "# Stamp: " + latest, "" ];
-
-    function makeArray(name, values) {
+    function makeArray(name, set) {
         lines.push(name + " = \\");
-        values.forEach(function(value) {
+        for (const value of [...set.keys()].sort()) {
             lines.push("\t" + value + " \\");
-        });
+        }
         lines.push("\t$(NULL)");
         lines.push("");
     }
@@ -175,59 +133,30 @@ function generateDeps(makefile, stats) {
     makeArray(prefix + "_OUTPUTS", outputs);
 
     makeArray(prefix + "_INSTALL", installs);
+    makeArray(prefix + "_GZ_INSTALL", gz_installs);
     makeArray(prefix + "_TESTS", tests);
 
     lines.push(stampfile + ": $(" + prefix + "_INPUTS)");
     lines.push("");
 
-    outputs.forEach(function(name) {
+    for (const name of [...outputs.keys()].sort()) {
         lines.push(name + ": " + stampfile);
         lines.push("")
-    });
+    }
 
-    inputs.forEach(function(name) {
+    for (const name of [...inputs.keys()].sort()) {
         lines.push(name + ":");
         lines.push("")
-    });
+    }
 
     lines.push("WEBPACK_INPUTS += $(" + prefix + "_INPUTS)");
     lines.push("WEBPACK_OUTPUTS += $(" + prefix + "_OUTPUTS)");
     lines.push("WEBPACK_INSTALL += $(" + prefix + "_INSTALL)");
+    lines.push("WEBPACK_GZ_INSTALL += $(" + prefix + "_GZ_INSTALL)");
     lines.push("TESTS += $(" + prefix + "_TESTS)");
     lines.push("");
 
     lines.push(prefix + ": " + stampfile);
-    lines.push("maintainer-clean-" + prefix + ": ");
-    lines.push("\trm -rf $(" + prefix + "_OUTPUTS) $(" + prefix + "_INSTALL) " + stampfile);
-    lines.push("maintainer-clean-local:: clean-" + prefix);
 
-    data = lines.join("\n") + "\n";
-    fs.writeFileSync(makefile, data);
-}
-
-function maybePushInput(inputs, input) {
-    // Don't include or external refs
-    if (input.endsWith('/') ||
-        input.indexOf("external ") === 0 || input.indexOf("multi ") === 0) {
-        return;
-    }
-
-    // Don't include node_modules
-    if (input.includes("/node_modules/")) {
-        return;
-    }
-
-    // The latest modified date
-    var stats = fs.statSync(input);
-    if (stats.mtime > latest)
-        latest = stats.mtime;
-
-    // Strip builddir and srcdir absolute paths from input file and add it
-    if (input.indexOf(cwd) === 0)
-        input = input.substr(cwd.length+1);
-    if (srcdir && input.indexOf(srcdir) === 0) {
-        input = input.substr(srcdir.length+1);
-    }
-
-    inputs[input] = true;
+    fs.writeFileSync(makefile, lines.join("\n") + "\n");
 }

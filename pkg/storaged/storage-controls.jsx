@@ -20,7 +20,7 @@
 import React, { useState } from 'react';
 
 import {
-    Button, Dropdown, DropdownItem, DropdownToggle,
+    Button, Dropdown, DropdownItem, DropdownToggle, KebabToggle,
     Tooltip, TooltipPosition,
     Progress, ProgressMeasureLocation, ProgressVariant,
     Switch,
@@ -193,7 +193,7 @@ export class StorageOnOff extends React.Component {
  * in a dangerous color.
  */
 
-export const StorageUsageBar = ({ stats, critical }) => {
+export const StorageUsageBar = ({ stats, critical, block }) => {
     if (!stats)
         return null;
 
@@ -204,6 +204,7 @@ export const StorageUsageBar = ({ stats, critical }) => {
         <Progress value={stats[0]} max={stats[1]}
             valueText={labelText}
             label={labelText}
+            aria-label={cockpit.format(_("Usage of $0"), block)}
             variant={fraction > critical ? ProgressVariant.danger : ProgressVariant.info}
             measureLocation={ProgressMeasureLocation.outside} />
     );
@@ -213,20 +214,24 @@ export const StorageMenuItem = ({ onClick, children }) => (
     <DropdownItem onKeyPress={checked(onClick)} onClick={checked(onClick)}>{children}</DropdownItem>
 );
 
-export const StorageBarMenu = ({ label, menuItems }) => {
+export const StorageBarMenu = ({ label, isKebab, menuItems }) => {
     const [isOpen, setIsOpen] = useState(false);
 
     if (!client.superuser.allowed)
         return null;
 
+    let toggle;
+    if (isKebab)
+        toggle = <KebabToggle onToggle={setIsOpen} />;
+    else
+        toggle = <DropdownToggle className="pf-m-primary" toggleIndicator={null}
+                                 onToggle={setIsOpen} aria-label={label}>
+            <BarsIcon color="white" />
+        </DropdownToggle>;
+
     return (
         <Dropdown onSelect={() => setIsOpen(!isOpen)}
-                  toggle={
-                      <DropdownToggle className="pf-m-primary" toggleIndicator={null}
-                                      onToggle={setIsOpen} aria-label={label}>
-                          <BarsIcon color="white" />
-                      </DropdownToggle>
-                  }
+                  toggle={toggle}
                   isOpen={isOpen}
                   isPlain
                   position="right"

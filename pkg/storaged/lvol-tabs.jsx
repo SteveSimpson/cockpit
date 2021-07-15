@@ -26,10 +26,14 @@ import {
     DescriptionList,
     DescriptionListTerm,
     DescriptionListGroup,
-    DescriptionListDescription
+    DescriptionListDescription,
+    Flex, FlexItem,
 } from "@patternfly/react-core";
 import { StorageButton, StorageLink } from "./storage-controls.jsx";
-import { existing_passphrase_fields, get_existing_passphrase } from "./crypto-keyslots.jsx";
+import {
+    existing_passphrase_fields, get_existing_passphrase_for_dialog,
+    request_passphrase_on_error_handler
+} from "./crypto-keyslots.jsx";
 import { dialog_open, TextInput, SizeSlider, BlockingMessage, TeardownMessage } from "./dialog.jsx";
 
 const _ = cockpit.gettext;
@@ -48,6 +52,13 @@ function lvol_rename(lvol) {
             }
         }
     });
+}
+
+function is_mounted_synch(block) {
+    return (cockpit.spawn(["findmnt", "-S", utils.decode_filename(block.Device)],
+                          { superuser: true, err: "message" })
+            .then(() => true)
+            .catch(() => false));
 }
 
 function lvol_and_fsys_resize(client, lvol, size, offline, passphrase) {
@@ -79,12 +90,28 @@ function lvol_and_fsys_resize(client, lvol, size, offline, passphrase) {
 
     function fsys_resize() {
         if (fsys) {
-            // When doing an offline resize, we need to first repair the filesystem.
-            if (offline || fsys.MountPoints.length === 0) {
-                return fsys.Repair({ }).then(function () { return fsys.Resize(size - crypto_overhead, { }) });
-            } else {
-                return fsys.Resize(size - crypto_overhead, { });
-            }
+            // HACK - https://bugzilla.redhat.com/show_bug.cgi?id=1934567
+            //
+            // block_fsys.MountedAt might be out of synch with reality
+            // here if resizing the crypto container accidentally
+            // triggered an unmount.  Thus, we check synchronously
+            // whether or not we should be doing a offline resize or
+            // not.
+            //
+            // Another option for us would be to just mount the
+            // filesystem back if that's what we expect, to undo the
+            // bug mentioned above. But let's be a bit more passive
+            // here and hope the bug gets fixed eventually.
+            return (is_mounted_synch(client.blocks[fsys.path])
+                    .then(is_mounted => {
+                        // When doing an offline resize, we need to first repair the filesystem.
+                        if (!is_mounted) {
+                            return (fsys.Repair({ })
+                                    .then(function () { return fsys.Resize(size - crypto_overhead, { }) }));
+                        } else {
+                            return fsys.Resize(size - crypto_overhead, { });
+                        }
+                    }));
         } else if (vdo) {
             if (size - crypto_overhead > vdo.physical_size)
                 return vdo.grow_physical();
@@ -247,17 +274,18 @@ function lvol_grow(client, lvol, info, to_fit) {
             action: function (vals) {
                 return utils.teardown_active_usage(client, usage)
                         .then(function () {
-                            return lvol_and_fsys_resize(client, lvol,
-                                                        to_fit ? grow_size : vals.size,
-                                                        info.grow_needs_unmount,
-                                                        vals.passphrase || recovered_passphrase);
+                            return (lvol_and_fsys_resize(client, lvol,
+                                                         to_fit ? grow_size : vals.size,
+                                                         info.grow_needs_unmount,
+                                                         vals.passphrase || recovered_passphrase)
+                                    .catch(request_passphrase_on_error_handler(dlg, vals, recovered_passphrase, block)));
                         });
             }
         }
     });
 
     if (passphrase_fields.length)
-        get_existing_passphrase(dlg, block).then(pp => { recovered_passphrase = pp });
+        get_existing_passphrase_for_dialog(dlg, block).then(pp => { recovered_passphrase = pp });
 }
 
 function lvol_shrink(client, lvol, info, to_fit) {
@@ -332,17 +360,18 @@ function lvol_shrink(client, lvol, info, to_fit) {
             action: function (vals) {
                 return utils.teardown_active_usage(client, usage)
                         .then(function () {
-                            return lvol_and_fsys_resize(client, lvol,
-                                                        to_fit ? shrink_size : vals.size,
-                                                        to_fit ? false : info.shrink_needs_unmount,
-                                                        vals.passphrase || recovered_passphrase);
+                            return (lvol_and_fsys_resize(client, lvol,
+                                                         to_fit ? shrink_size : vals.size,
+                                                         to_fit ? false : info.shrink_needs_unmount,
+                                                         vals.passphrase || recovered_passphrase)
+                                    .catch(request_passphrase_on_error_handler(dlg, vals, recovered_passphrase, block)));
                         });
             }
         }
     });
 
     if (passphrase_fields.length)
-        get_existing_passphrase(dlg, block).then(pp => { recovered_passphrase = pp });
+        get_existing_passphrase_for_dialog(dlg, block).then(pp => { recovered_passphrase = pp });
 }
 
 export class BlockVolTab extends React.Component {
@@ -382,11 +411,14 @@ export class BlockVolTab extends React.Component {
 
         return (
             <div>
-                <DescriptionList isHorizontal>
+                <DescriptionList className="pf-m-horizontal-on-sm">
                     <DescriptionListGroup>
                         <DescriptionListTerm>{_("Name")}</DescriptionListTerm>
                         <DescriptionListDescription>
-                            <StorageLink onClick={rename}>{this.props.lvol.Name}</StorageLink>
+                            <Flex>
+                                <FlexItem>{this.props.lvol.Name}</FlexItem>
+                                <FlexItem><StorageLink onClick={rename}>{_("edit")}</StorageLink></FlexItem>
+                            </Flex>
                         </DescriptionListDescription>
                     </DescriptionListGroup>
                     { !unused_space &&
@@ -440,11 +472,14 @@ export class PoolVolTab extends React.Component {
         }
 
         return (
-            <DescriptionList isHorizontal>
+            <DescriptionList className="pf-m-horizontal-on-sm">
                 <DescriptionListGroup>
                     <DescriptionListTerm>{_("Name")}</DescriptionListTerm>
                     <DescriptionListDescription>
-                        <StorageLink onClick={rename}>{this.props.lvol.Name}</StorageLink>
+                        <Flex>
+                            <FlexItem>{this.props.lvol.Name}</FlexItem>
+                            <FlexItem><StorageLink onClick={rename}>{_("edit")}</StorageLink></FlexItem>
+                        </Flex>
                     </DescriptionListDescription>
                 </DescriptionListGroup>
 

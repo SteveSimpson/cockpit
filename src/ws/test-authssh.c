@@ -192,7 +192,7 @@ test_basic_good (TestCase *test,
 
   creds = cockpit_web_service_get_creds (service);
   g_assert_cmpstr (application, ==, cockpit_creds_get_application (creds));
-  g_assert_cmpstr (PASSWORD, ==, g_bytes_get_data (cockpit_creds_get_password (creds), NULL));
+  g_assert_null (cockpit_creds_get_password (creds));
 
   g_hash_table_unref (out_headers);
   g_object_unref (service);
@@ -255,8 +255,8 @@ main (int argc,
 {
   cockpit_ws_ssh_program = BUILDDIR "/cockpit-ssh";
 
-  g_setenv ("COCKPIT_SSH_KNOWN_HOSTS_FILE", SRCDIR "/src/ssh/mock_known_hosts", TRUE);
-  g_setenv ("COCKPIT_SSH_BRIDGE_COMMAND", BUILDDIR "/cockpit-bridge", TRUE);
+  g_assert_setenv ("COCKPIT_SSH_KNOWN_HOSTS_FILE", SRCDIR "/src/ssh/mock_known_hosts", TRUE);
+  g_assert_setenv ("COCKPIT_SSH_BRIDGE_COMMAND", BUILDDIR "/cockpit-bridge", TRUE);
 
   cockpit_test_init (&argc, &argv);
 

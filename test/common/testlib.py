@@ -42,9 +42,15 @@ import testvm
 import cdp
 from fmf_metadata.base import set_obj_attribute, is_test_function, generic_metadata_setter
 
+try:
+    from PIL import Image
+    import io
+except ImportError:
+    Image = None
 
-TEST_DIR = os.path.normpath(os.path.dirname(os.path.realpath(os.path.join(__file__, ".."))))
-BOTS_DIR = os.path.normpath(os.path.join(TEST_DIR, "..", "bots"))
+BASE_DIR = os.path.realpath(f'{__file__}/../../..')
+TEST_DIR = f'{BASE_DIR}/test'
+BOTS_DIR = f'{BASE_DIR}/bots'
 
 os.environ["PATH"] = "{0}:{1}:{2}".format(os.environ.get("PATH"), BOTS_DIR, TEST_DIR)
 
@@ -94,7 +100,7 @@ def attach(filename):
 
 
 class Browser:
-    def __init__(self, address, label, port=None):
+    def __init__(self, address, label, pixels_label=None, port=None):
         if ":" in address:
             (self.address, unused, self.port) = address.rpartition(":")
         else:
@@ -104,11 +110,13 @@ class Browser:
             self.port = port
         self.default_user = "admin"
         self.label = label
+        self.pixels_label = pixels_label
         path = os.path.dirname(__file__)
         self.cdp = cdp.CDP("C.utf8", verbose=opts.trace, trace=opts.trace,
                            inject_helpers=[os.path.join(path, "test-functions.js"), os.path.join(path, "sizzle.js")])
         self.password = "foobar"
         self.timeout_factor = int(os.getenv("TEST_TIMEOUT_FACTOR", "1"))
+        self.failed_pixel_tests = 0
 
     def title(self):
         return self.cdp.eval('document.title')
@@ -295,6 +303,7 @@ class Browser:
             9: "Tab",         # Tab key
             13: "Enter",      # Enter key
             27: "Escape",     # Escape key
+            37: "ArrowLeft",  # Arrow key left
             40: "ArrowDown",  # Arrow key down
             45: "Insert",     # Insert key
         }
@@ -594,16 +603,11 @@ class Browser:
             self.click('#go-logout')
         self.expect_load()
 
-    def relogin(self, path=None, user=None, superuser=None):
-        if user is None:
-            user = self.default_user
+    def relogin(self, path=None, user=None, superuser=None, wait_remote_session_machine=None):
         self.logout()
-        self.wait_visible("#login")
-        self.set_val("#login-user-input", user)
-        self.set_val("#login-password-input", self.password)
-        if superuser is not None:
-            self.eval_js('window.localStorage.setItem("superuser:%s", "%s");' % (user, "any" if superuser else "none"))
-        self.click('#login-button')
+        if wait_remote_session_machine:
+            wait_remote_session_machine.execute("while pgrep -a cockpit-ssh; do sleep 1; done")
+        self.try_login(user, superuser=superuser)
         self.expect_load()
         self._wait_present('#content')
         self.wait_visible('#content')
@@ -653,6 +657,112 @@ class Browser:
                 f.write(html.encode('UTF-8'))
             attach(filename)
             print("Wrote HTML dump to " + filename)
+
+    def assert_pixels(self, selector, key, ignore=[]):
+        """Compare the given element with its reference"""
+
+        if not (Image and self.pixels_label and self.cdp and self.cdp.valid):
+            return
+
+        self.call_js_func('ph_scrollIntoViewIfNeeded', selector)
+
+        rect = self.call_js_func('ph_element_clip', selector)
+
+        def relative_clip(sel):
+            r = self.call_js_func('ph_element_clip', sel)
+            return (r['x'] - rect['x'],
+                    r['y'] - rect['y'],
+                    r['x'] - rect['x'] + r['width'],
+                    r['y'] - rect['y'] + r['height'])
+
+        reference_dir = os.path.join(TEST_DIR, 'reference')
+        if not os.path.exists(os.path.join(reference_dir, '.git')):
+            subprocess.check_call([f'{TEST_DIR}/common/pixel-tests', 'pull'])
+
+        ignore_rects = list(map(relative_clip, map(lambda item: selector + " " + item, ignore)))
+        base = self.pixels_label + "-" + key
+        filename = base + "-pixels.png"
+        ref_filename = os.path.join(reference_dir, filename)
+        ret = self.cdp.invoke("Page.captureScreenshot", clip=rect, no_trace=True)
+        png_now = base64.standard_b64decode(ret["data"])
+        png_ref = os.path.exists(ref_filename) and open(ref_filename, "rb").read()
+        if not png_ref:
+            with open(filename, 'wb') as f:
+                f.write(png_now)
+            attach(filename)
+            print("New pixel test reference " + filename)
+            self.failed_pixel_tests += 1
+        else:
+            img_now = Image.open(io.BytesIO(png_now)).convert("RGBA")
+            img_ref = Image.open(io.BytesIO(png_ref)).convert("RGBA")
+            img_delta = img_ref.copy()
+
+            # The current snapshot and the reference don't need to
+            # be perfectly identical.  They might differ in the
+            # following ways:
+            #
+            # - A pixel in the reference image might be
+            #   transparent.  These pixels are ignored.
+            #
+            # - The call to assert_pixels specifies a list of
+            #   rectangles (via CSS selectors).  Pixels within those
+            #   rectangles (and slightly outside) are ignored.  Pixels
+            #   just outside the rectangles are also ignored to avoid
+            #   issues with rounding coordinates.
+            #
+            # - The RGB values of pixels can differ by up to 2.
+            #
+            # Pixels that are different but have been ignored are
+            # marked in the delta image in green.
+
+            def masked(ref):
+                return ref[3] != 255
+
+            def ignorable_coord(x, y):
+                for (x0, y0, x1, y1) in ignore_rects:
+                    if x >= x0 - 2 and x < x1 + 2 and y >= y0 - 2 and y < y1 + 2:
+                        return True
+                return False
+
+            def ignorable_change(a, b):
+                return abs(a[0] - b[0]) <= 2 and abs(a[1] - b[1]) <= 2 and abs(a[1] - b[1]) <= 2
+
+            def img_eq(ref, now, delta):
+                # This is slow but exactly what we want.
+                # ImageMath might be able to speed this up.
+                if ref.size != now.size:
+                    return False
+                data_ref = ref.load()
+                data_now = now.load()
+                data_delta = delta.load()
+                result = True
+                width, height = ref.size
+                for y in range(height):
+                    for x in range(width):
+                        if data_ref[x, y] != data_now[x, y]:
+                            if masked(data_ref[x, y]) or ignorable_coord(x, y) or ignorable_change(data_ref[x, y], data_now[x, y]):
+                                data_delta[x, y] = (0, 255, 0, 255)
+                            else:
+                                data_delta[x, y] = (255, 0, 0, 255)
+                                result = False
+                return result
+
+            if not img_eq(img_ref, img_now, img_delta):
+                if img_now.size == img_ref.size:
+                    # Preserve alpha channel so that the 'now'
+                    # image can be used as the new reference image
+                    # without further changes
+                    img_now.putalpha(img_ref.getchannel("A"))
+                img_now.save(filename)
+                attach(filename)
+                ref_filename_for_attach = base + "-reference.png"
+                img_ref.save(ref_filename_for_attach)
+                attach(ref_filename_for_attach)
+                delta_filename = base + "-delta.png"
+                img_delta.save(delta_filename)
+                attach(delta_filename)
+                print("Differences in pixel test " + base)
+                self.failed_pixel_tests += 1
 
     def get_js_log(self):
         """Return the current javascript log"""
@@ -753,15 +863,17 @@ class MachineCase(unittest.TestCase):
 
     def new_machine(self, image=None, forward={}, restrict=True, cleanup=True, **kwargs):
         machine_class = self.machine_class
-        if image is None:
-            image = self.image
         if opts.address:
             if machine_class or forward:
                 raise unittest.SkipTest("Cannot run this test when specific machine address is specified")
-            machine = testvm.Machine(address=opts.address, image=image, verbose=opts.trace, browser=opts.browser)
+            machine = testvm.Machine(address=opts.address, image=image or self.image, verbose=opts.trace, browser=opts.browser)
             if cleanup:
                 self.addCleanup(machine.disconnect)
         else:
+            if image is None:
+                image = os.path.join(TEST_DIR, "images", self.image)
+                if not os.path.exists(image):
+                    raise FileNotFoundError("Can't run tests without a prepared image; use test/image-prepare")
             if not machine_class:
                 machine_class = testvm.VirtMachine
             if not self.network:
@@ -781,7 +893,10 @@ class MachineCase(unittest.TestCase):
         if machine is None:
             machine = self.machine
         label = self.label() + "-" + machine.label
-        browser = Browser(machine.web_address, label=label, port=machine.web_port)
+        pixels_label = None
+        if machine.image == testvm.TEST_OS_DEFAULT and os.environ.get("TEST_BROWSER", "chromium") == "chromium" and not self.is_devel_build():
+            pixels_label = self.label()
+        browser = Browser(machine.web_address, label=label, pixels_label=pixels_label, port=machine.web_port)
         self.addCleanup(browser.kill)
         return browser
 
@@ -793,6 +908,9 @@ class MachineCase(unittest.TestCase):
     def is_nondestructive(self):
         test_method = getattr(self.__class__, self._testMethodName)
         return getattr(test_method, "_testlib__non_destructive", False)
+
+    def is_devel_build(self):
+        return os.environ.get('NODE_ENV') == 'development'
 
     def disable_preload(self, *packages):
         for pkg in packages:
@@ -808,14 +926,14 @@ class MachineCase(unittest.TestCase):
         if self.machine.execute("if test -e %s; then echo yes; fi" % path):
             self.write_file(path + '/override.json', '{ "preload": [%s]}' % ', '.join('"{0}"'.format(page) for page in pages))
 
-    def system_before(self, version, release=1):
+    def system_before(self, version):
         try:
-            v = self.machine.execute("rpm -q --qf '%{V}\\n' cockpit-system").split(".")
+            v = self.machine.execute("""rpm -q --qf '%{V}' cockpit-system ||
+                                        dpkg-query -W -f '${source:Upstream-Version}' cockpit-system
+                                     """).split(".")
         except subprocess.CalledProcessError:
             return False
 
-        if int(v[0]) == version:
-            return int(v[1]) < release
         return int(v[0]) < version
 
     def setUp(self, restrict=True):
@@ -902,8 +1020,7 @@ class MachineCase(unittest.TestCase):
 
             # Pages with debug enabled are huge and loading/executing them is heavy for browsers
             # To make it easier for browsers and thus make tests quicker, disable packagekit and systemd preloads
-            # Only "TEST_OS_DEFAULT" has debug build enabled, see `build_and_install()` in `test/image-prepare`
-            if self.machine.image == testvm.TEST_OS_DEFAULT:
+            if self.is_devel_build():
                 self.disable_preload("packagekit", "systemd")
 
     def nonDestructiveSetup(self):
@@ -968,7 +1085,8 @@ class MachineCase(unittest.TestCase):
         def terminate_sessions():
             sessions = self.machine.execute("loginctl --no-legend list-sessions | awk '/web console/ { print $1 }'").strip().split()
             for s in sessions:
-                self.machine.execute("loginctl terminate-session %s" % s)
+                # Don't insist that terminating works, the session might be gone by now.
+                self.machine.execute("loginctl terminate-session %s || true" % s)
                 # Wait for it to be no longer active. Sometimes
                 # sessions are permanently stuck in state "closing",
                 # but that's fine since they won't do any harm.
@@ -980,6 +1098,7 @@ class MachineCase(unittest.TestCase):
         if self.checkSuccess() and self.machine.ssh_reachable:
             self.check_journal_messages()
             self.check_browser_errors()
+            self.check_pixel_tests()
         shutil.rmtree(self.tmpdir, ignore_errors=True)
 
     def login_and_go(self, path=None, user=None, host=None, superuser=True, urlroot=None, tls=False):
@@ -1118,14 +1237,6 @@ class MachineCase(unittest.TestCase):
                                     'which: no python in .*'
                                     )
 
-    def allow_failed_sudo_journal_messages(self):
-        self.allow_journal_messages(".* is not in the sudoers file.  This incident will be reported.",
-                                    "Error executing command as another user: Not authorized",
-                                    "This incident has been reported.",
-                                    "Sorry, try again.",
-                                    ".*incorrect password attempt.*",
-                                    "sudo:.*")
-
     def check_journal_messages(self, machine=None):
         """Check for unexpected journal entries."""
         machine = machine or self.machine
@@ -1156,28 +1267,7 @@ class MachineCase(unittest.TestCase):
         if "TEST_AUDIT_NO_SELINUX" not in os.environ:
             messages += machine.audit_messages("14", cursor=cursor)  # 14xx is selinux
 
-        if self.image.startswith('debian'):
-            # Debian images don't have any non-C locales (mostly deliberate, to test this scenario somewhere)
-            self.allowed_messages.append("invalid or unusable locale: .*")
-
-        if self.image.startswith('fedora') or self.image.startswith('rhel-9'):
-            # Fedora and RHEL 9 have switched to dbus-broker
-            self.allowed_messages.append("dbus-daemon didn't send us a dbus address; not installed?.*")
-
-        if self.image in ['fedora-34']:
-            # HACK: https://bugzilla.redhat.com/show_bug.cgi?id=1929259
-            self.allow_journal_messages('audit:.*denied.*comm="pmdakvm" lockdown_reason="debugfs access".*')
-
-        if self.image in ['debian-testing', 'ubuntu-stable']:
-            # HACK: https://bugs.debian.org/951477
-            self.allowed_messages.append(r'Process .* \(ip6?tables\) of user 0 dumped core.*')
-            self.allowed_messages.append(r'Process .* \(iptables-restor\) of user 0 dumped core.*')
-            self.allowed_messages.append(r'Process .* \(ip6tables-resto\) of user 0 dumped core.*')
-            self.allowed_messages.append(r'Process .* \(ebtables\) of user 0 dumped core.*')
-            # don't ignore all stack traces
-            self.allowed_messages.append('^#[0-9]+ .*(nftnl|xtables-nft|__libc_start_main).*')
-            # but we have to ignore that general header line
-            self.allowed_messages.append('^Stack trace of.*')
+        self.allowed_messages += self.machine.allowed_messages()
 
         all_found = True
         first = None
@@ -1229,6 +1319,10 @@ class MachineCase(unittest.TestCase):
                     break
             else:
                 raise Error(UNEXPECTED_MESSAGE + "browser errors:\n" + log)
+
+    def check_pixel_tests(self):
+        if self.browser and self.browser.failed_pixel_tests > 0:
+            raise Error("Some pixel tests have failed")
 
     def check_axe(self, label=None, suffix=""):
         """Run aXe check on the currently active frame
@@ -1508,7 +1602,7 @@ def checkRunAxe():
         return False
 
     # when running from release tarballs, module is not available
-    if not os.path.exists(os.path.join(TEST_DIR, "common/axe.js")):
+    if not os.path.exists(f'{BASE_DIR}/node_modules/axe-core/axe.js'):
         sys.stderr.write('# enableAxe: axe is not installed, skipping\n')
         return False
 
@@ -1522,7 +1616,7 @@ def enableAxe(method):
         return method
 
     def wrapper(*args):
-        with open(os.path.join(TEST_DIR, "common/axe.js")) as f:
+        with open(f'{BASE_DIR}/node_modules/axe-core/axe.js') as f:
             script = f.read()
         # first method argument is "self", a MachineCase instance
         args[0].browser.cdp.invoke("Page.addScriptToEvaluateOnNewDocument", source=script, no_trace=True)
@@ -1709,6 +1803,9 @@ def test_main(options=None, suite=None, attachments=None, **kwargs):
     if options.list:
         print_tests(suite)
         return 0
+
+    attach(os.path.join(TEST_DIR, "common/pixeldiff.html"))
+    attach(os.path.join(TEST_DIR, "common/link-patterns.json"))
 
     runner = TapRunner(verbosity=opts.verbosity)
     ret = runner.run(suite)

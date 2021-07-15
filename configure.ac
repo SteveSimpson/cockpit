@@ -37,7 +37,6 @@ AC_CONFIG_AUX_DIR([tools])
 AC_CONFIG_MACRO_DIR([tools])
 
 AM_INIT_AUTOMAKE([1.9 foreign dist-xz no-dist-gzip subdir-objects tar-pax])
-AM_MAINTAINER_MODE([enable])
 
 AC_USE_SYSTEM_EXTENSIONS
 
@@ -113,13 +112,13 @@ COCKPIT_PCP_LIBS="$COCKPIT_LIBS"
 AC_SUBST(COCKPIT_PCP_CFLAGS)
 AC_SUBST(COCKPIT_PCP_LIBS)
 
-COCKPIT_SESSION_CFLAGS="$KRB5_CFLAGS"
-COCKPIT_SESSION_LIBS="$KRB5_LIBS"
+COCKPIT_SESSION_CFLAGS="$KRB5_CFLAGS $LIBSYSTEMD_CFLAGS"
+COCKPIT_SESSION_LIBS="$KRB5_LIBS $LIBSYSTEMD_LIBS"
 AC_SUBST(COCKPIT_SESSION_CFLAGS)
 AC_SUBST(COCKPIT_SESSION_LIBS)
 
-PAM_COCKPIT_CERT_CFLAGS="$COCKPIT_CFLAGS $LIBSYSTEMD_CFLAGS"
-PAM_COCKPIT_CERT_LIBS="$LIBSYSTEMD_LIBS"
+PAM_COCKPIT_CERT_CFLAGS="$COCKPIT_CFLAGS"
+PAM_COCKPIT_CERT_LIBS=""
 AC_SUBST(PAM_COCKPIT_CERT_CFLAGS)
 AC_SUBST(PAM_COCKPIT_CERT_LIBS)
 
@@ -155,9 +154,6 @@ AM_CONDITIONAL(WITH_COCKPIT_SSH, test "$enable_ssh" = "yes")
 # pam
 AC_CHECK_HEADER([security/pam_appl.h], ,
   [AC_MSG_ERROR([Couldn't find PAM headers. Try installing pam-devel])]
-)
-AC_CHECK_LIB(pam, pam_open_session, [ true ],
-  [AC_MSG_ERROR([Couldn't find PAM library. Try installing pam-devel])]
 )
 PAM_LIBS="-lpam"
 COCKPIT_SESSION_LIBS="$COCKPIT_SESSION_LIBS $PAM_LIBS"
@@ -216,11 +212,6 @@ fi
 
 AM_CONDITIONAL([ENABLE_PCP], [test "$enable_pcp" = "yes"])
 
-# gssapi
-AC_CHECK_LIB(gssapi_krb5, gss_store_cred, [ true ],
-  [AC_MSG_ERROR([Couldn't find GSSAPI KRB5 library. Try installing krb5-devel])]
-)
-
 # systemd
 AC_ARG_WITH([systemdunitdir], [AC_HELP_STRING([--with-systemdunitdir=DIR],
                                               [directory to install systemd unit files in])])
@@ -244,30 +235,14 @@ AC_SUBST([systemdunitdir], [$systemdunitdir])
 
 GETTEXT_PACKAGE=cockpit
 AC_SUBST([GETTEXT_PACKAGE])
-AM_GLIB_GNU_GETTEXT
 AC_DEFINE_UNQUOTED([GETTEXT_PACKAGE],["$GETTEXT_PACKAGE"],[gettext domain])
 
-AC_PATH_PROG(MSGCAT, msgcat)
-AC_PATH_PROG(MSGFMT, msgfmt)
-AC_PATH_PROG(MSGGREP, msggrep)
-AC_PATH_PROG(MSGMERGE, msgmerge)
-AC_PATH_PROG(XGETTEXT, xgettext)
-AC_MSG_CHECKING(for gettext binaries)
-if test -x "$MSGCAT" -a -x "$MSGFMT" -a -x "$MSGMERGE" -a -x "$MSGGREP" -a -x "$XGETTEXT"; then
-  AC_SUBST(MSGCAT)
-  AC_SUBST(MSGFMT)
-  AC_SUBST(MSGGREP)
-  AC_SUBST(MSGMERGE)
-  AC_SUBST(XGETTEXT)
-  AC_MSG_RESULT(yes)
-else
-  AC_MSG_ERROR([no. Please install gettext tools])
+# We need msgcat, msgfmt, msggrep, msgmerge, but they're all in the same
+# package as xgettext, and we find them by PATH, so just check for the one.
+AC_PATH_PROG([XGETTEXT], [xsltproc], [no])
+if test "$XGETTEXT" = "no"; then
+        AC_MSG_ERROR([Please install gettext tools])
 fi
-
-# go
-
-AC_PATH_PROG([GOLANG], [go])
-AM_CONDITIONAL([WITH_GOLANG], [test -n "$GOLANG"])
 
 # usermod
 #
@@ -567,7 +542,6 @@ echo "
         admin group:                ${admin_group}
         selinux config type:        ${COCKPIT_SELINUX_CONFIG_TYPE}
 
-        Maintainer mode:            ${USE_MAINTAINER_MODE}
         Building docs:              ${enable_doc}
         Debug mode:                 ${debug_status}
         Node environment:           ${NODE_ENV}
@@ -584,4 +558,5 @@ echo "
         ssh-agent:                  ${SSH_AGENT}
         usermod:                    ${USERMOD}
         chcon:                      ${CHCON}
-"
+
+Now type 'make' to compile cockpit."

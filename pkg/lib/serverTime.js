@@ -22,8 +22,8 @@ import { Button, Popover, Select, SelectOption, SelectVariant } from '@patternfl
 import { show_modal_dialog } from "cockpit-components-dialog.jsx";
 import { useObject, useEvent } from "hooks.js";
 
-import moment from "moment";
 import * as service from "service.js";
+import * as timeformat from "timeformat.js";
 import jQuery from "jquery";
 
 import { superuser } from "superuser.js";
@@ -66,8 +66,7 @@ export function ServerTime() {
     /*
      * The time we return from here as its UTC time set to the
      * server time. This is the only way to get predictable
-     * behavior and formatting of a Date() object in the absence of
-     * IntlDateFormat and  friends.
+     * behavior.
      */
     Object.defineProperty(self, 'utc_fake_now', {
         enumerable: true,
@@ -85,9 +84,8 @@ export function ServerTime() {
     });
 
     self.format = function format(and_time) {
-        if (and_time)
-            return moment.utc(self.utc_fake_now).format('lll');
-        return moment.utc(self.utc_fake_now).format('ll');
+        const options = { dateStyle: "medium", timeStyle: and_time ? "short" : undefined, timeZone: "UTC" };
+        return timeformat.formatter(options).format(self.utc_fake_now);
     };
 
     const updateInterval = window.setInterval(emit_changed, 30000);
@@ -121,10 +119,8 @@ export function ServerTime() {
     self.change_time = function change_time(datestr, hourstr, minstr) {
         return new Promise((resolve, reject) => {
             /*
-             * The browser is brain dead when it comes to dates. But even if
-             * it wasn't, or we loaded a library like moment.js, there is no
-             * way to make sense of this date without a round trip to the
-             * server ... the timezone is really server specific.
+             * There is no way to make sense of this date without a round trip to the
+             * server, as the timezone is really server specific.
              */
             cockpit.spawn(["date", "--date=" + datestr + " " + hourstr + ":" + minstr, "+%s"])
                     .fail(function(ex) {
@@ -226,8 +222,8 @@ export function ServerTime() {
             sub_status: null
         };
 
-        // flag for tests that timedated proxy got activated
-        if (timedate.CanNTP !== undefined && timedate1_service.unit && timedate1_service.unit.Id)
+        // flag for tests that timedated/timesyncd proxies got initialized
+        if (timedate.CanNTP !== undefined && timedate1_service.unit && timedate1_service.unit.Id && timesyncd_service.enabled !== null)
             status.initialized = true;
 
         status.active = timedate.NTP;
@@ -265,29 +261,25 @@ export function ServerTime() {
          * - systemd-timedated is answering for
          *   org.freedesktop.timedate1 as opposed to, say, timedatex.
          *
-         * - systemd-timesyncd is actually available.
+         * - systemd-timesyncd is enabled (false if chrony is being used)
          *
          * The better alternative would be to have an API in
          * o.fd.timedate1 for managing the list of NTP server
          * candidates.
          */
-
-        const timedate1 = timedate1_service;
-        const timesyncd = timesyncd_service;
-
         const result = {
             supported: false,
             enabled: false,
             servers: []
         };
 
-        if (!timedate1.exists || timedate1.unit.Id !== "systemd-timedated.service") {
+        if (!timedate1_service.exists || timedate1_service.unit.Id !== "systemd-timedated.service") {
             console.log("systemd-timedated not in use, ntp server configuration not supported");
             return Promise.resolve(result);
         }
 
-        if (!timesyncd.exists) {
-            console.log("systemd-timesyncd not available, ntp server configuration not supported");
+        if (!timesyncd_service.enabled) {
+            console.log("systemd-timesyncd not enabled, ntp server configuration not supported");
             return Promise.resolve(result);
         }
 
@@ -644,30 +636,16 @@ function change_systime_dialog(server_time, timezone) {
                                                                     state.manual_hours,
                                                                     state.manual_minutes));
                     } else {
-                    /* HACK - https://bugzilla.redhat.com/show_bug.cgi?id=1272085
-                     *
-                     * Switch off NTP, bump the clock by one microsecond to
-                     * clear the NTPSynchronized status, write the config
-                     * file, and switch NTP back on.
-                     *
-                     */
+                        // Switch off NTP, write the config file, and switch NTP back on
                         return server_time.set_ntp(false)
-                                .then(function() {
-                                    return server_time.bump_time(1);
-                                })
-                                .then(function() {
+                                .then(() => {
                                     if (state.custom_ntp.supported)
                                         return server_time.set_custom_ntp(state.custom_ntp.servers.filter(s => !!s),
                                                                           state.mode == "ntp_time_custom");
                                     else
                                         return Promise.resolve();
                                 })
-                                .then(function() {
-                                    // NTPSynchronized should be false now.  Make
-                                    // sure we pick that up immediately.
-                                    server_time.poll_ntp_synchronized();
-                                    return server_time.set_ntp(true);
-                                });
+                                .then(() => server_time.set_ntp(true));
                     }
                 });
     }

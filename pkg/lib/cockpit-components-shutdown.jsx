@@ -17,7 +17,6 @@
  * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
  */
 
-import moment from "moment";
 import cockpit from "cockpit";
 import React from 'react';
 import {
@@ -27,7 +26,7 @@ import {
 } from '@patternfly/react-core';
 
 import { ServerTime } from 'serverTime.js';
-import { validateTime } from 'timepicker-helpers.js';
+import * as timeformat from "timeformat.js";
 
 import "cockpit-components-shutdown.scss";
 
@@ -43,33 +42,42 @@ export class ShutdownModal extends React.Component {
             message: "",
             isOpen: false,
             selected: "1",
+            dateObj: undefined,
             date: "",
-            today: "",
             time: "",
             when: "+1",
+            formFilled: false,
         };
         this.onSubmit = this.onSubmit.bind(this);
-        this.updateDatetime = this.updateDatetime.bind(this);
+        this.updateDate = this.updateDate.bind(this);
+        this.updateTime = this.updateTime.bind(this);
         this.calculate = this.calculate.bind(this);
 
         this.server_time = new ServerTime();
     }
 
     componentDidMount() {
-        this.server_time.wait().then(() => {
-            const date = new Date(this.server_time.utc_fake_now);
-            const hour = this.server_time.utc_fake_now.getUTCHours();
-            const minute = this.server_time.utc_fake_now.getUTCMinutes();
-            this.setState({
-                date: date,
-                today: date,
-                time: hour.toString().padStart(2, "0") + ":" + minute.toString().padStart(2, "0"),
-            });
-        });
+        this.server_time.wait()
+                .then(() => {
+                    const dateObject = this.server_time.utc_fake_now;
+                    const date = timeformat.dateShort(dateObject);
+                    const hour = this.server_time.utc_fake_now.getUTCHours();
+                    const minute = this.server_time.utc_fake_now.getUTCMinutes();
+                    this.setState({
+                        dateObject,
+                        date,
+                        time: hour.toString().padStart(2, "0") + ":" + minute.toString().padStart(2, "0"),
+                    });
+                })
+                .always(() => this.setState({ formFilled: true }));
     }
 
-    updateDatetime(key, value) {
-        this.setState({ [key] : value }, this.calculate);
+    updateDate(value, dateObject) {
+        this.setState({ date : value, dateObject });
+    }
+
+    updateTime(value, hour, minute) {
+        this.setState({ time: value, hour, minute });
     }
 
     calculate() {
@@ -85,13 +93,8 @@ export class ShutdownModal extends React.Component {
             return;
         }
 
-        const time_error = !validateTime(this.state.time);
-        const date = this.state.date;
-
-        let date_error = false;
-
-        if (!date || isNaN(date.getTime()) || date.getTime() < 0)
-            date_error = true;
+        const time_error = this.state.hour === null || this.state.minute === null;
+        const date_error = !this.state.dateObject;
 
         if (time_error && date_error) {
             this.setState({ dateError: _("Invalid date format and invalid time format") });
@@ -104,7 +107,7 @@ export class ShutdownModal extends React.Component {
             return;
         }
 
-        const cmd = ["date", "--date=" + moment(date).format('YYYY-MM-DD') + " " + this.state.time, "+%s"];
+        const cmd = ["date", "--date=" + (new Intl.DateTimeFormat().format(this.state.dateObject)) + " " + this.state.time, "+%s"];
         this.date_spawn = cockpit.spawn(cmd, { err: "message" });
         this.date_spawn.then(data => {
             const input_timestamp = parseInt(data, 10);
@@ -133,7 +136,7 @@ export class ShutdownModal extends React.Component {
         this.date_spawn.finally(() => { this.date_spawn = null });
     }
 
-    onSubmit() {
+    onSubmit(event) {
         const arg = this.props.shutdown ? "--poweroff" : "--reboot";
         if (!this.props.shutdown)
             cockpit.hint("restart");
@@ -141,6 +144,9 @@ export class ShutdownModal extends React.Component {
         cockpit.spawn(["shutdown", arg, this.state.when, this.state.message], { superuser: true, err: "message" })
                 .then(this.props.onClose)
                 .catch(e => this.setState({ error: e }));
+
+        event.preventDefault();
+        return false;
     }
 
     render() {
@@ -167,7 +173,7 @@ export class ShutdownModal extends React.Component {
                    </>}
             >
                 <>
-                    <Form isHorizontal>
+                    <Form isHorizontal onSubmit={this.onSubmit}>
                         <FormGroup fieldId="message" label={_("Message to logged in users")}>
                             <TextArea id="message" resizeOrientation="vertical" value={this.state.message} onChange={v => this.setState({ message: v })} />
                         </FormGroup>
@@ -176,22 +182,33 @@ export class ShutdownModal extends React.Component {
                                    validated={this.state.dateError ? "error" : "default"}>
                             <Flex className="shutdown-delay-group" alignItems={{ default: 'alignItemsCenter' }}>
                                 <Select toggleId="delay" isOpen={this.state.isOpen} selections={this.state.selected}
+                                        isDisabled={!this.state.formFilled}
                                         className='shutdown-select-delay'
                                         onToggle={o => this.setState({ isOpen: o })} menuAppendTo="parent"
                                         onSelect={(e, s) => this.setState({ selected: s, isOpen: false }, this.calculate)}>
                                     {options}
                                 </Select>
                                 {this.state.selected === "x" && <>
-                                    <DatePicker aria-label={_("Pick date")} locale={cockpit.language} dateFormat={d => moment(d).format('L')}
+                                    <DatePicker aria-label={_("Pick date")}
+                                                buttonAriaLabel={_("Toggle date picker")}
                                                 className='shutdown-date-picker'
-                                                invalidFormatText="" dateParse={d => moment(d, 'L').toDate()}
-                                                value={moment(this.state.date).format('L')} onChange={(d, ds) => this.updateDatetime("date", ds)} />
-                                    <TimePicker defaultTime={this.state.time} is24Hour
+                                                dateFormat={timeformat.dateShort}
+                                                dateParse={timeformat.parseShortDate}
+                                                invalidFormatText=""
+                                                isDisabled={!this.state.formFilled}
+                                                locale={cockpit.language}
+                                                onBlur={this.calculate}
+                                                onChange={(d, ds) => this.updateDate(d, ds)}
+                                                placeholder={timeformat.dateShortFormat()}
+                                                value={this.state.date} />
+                                    <TimePicker time={this.state.time} is24Hour
                                                 className='shutdown-time-picker'
                                                 id="shutdown-time"
+                                                isDisabled={!this.state.formFilled}
                                                 invalidFormatErrorMessage=""
                                                 menuAppendTo={() => document.body}
-                                                onChange={time => this.updateDatetime("time", time) } />
+                                                onBlur={this.calculate}
+                                                onChange={(time, h, m) => this.updateTime(time, h, m) } />
                                 </>}
                             </Flex>
                         </FormGroup>

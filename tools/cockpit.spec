@@ -16,7 +16,7 @@
 #
 
 # This file is maintained at the following location:
-# https://github.com/cockpit-project/cockpit/blob/master/tools/cockpit.spec
+# https://github.com/cockpit-project/cockpit/blob/main/tools/cockpit.spec
 #
 # If you are editing this file in another location, changes will likely
 # be clobbered the next time an automated release is done.
@@ -41,8 +41,8 @@
 
 %define __lib lib
 
-%if 0%{?suse_version}
-%define pamdir /%{_lib}/security
+%if %{defined _pamdir}
+%define pamdir %{_pamdir}
 %else
 %define pamdir %{_libdir}/security
 %endif
@@ -79,6 +79,13 @@ Source0:        https://github.com/cockpit-project/cockpit/releases/download/%{v
 %else
 %define build_basic 1
 %define build_optional 1
+%endif
+
+# Ship custom SELinux policy only in Fedora and RHEL-9 onward
+%if 0%{?rhel} >= 9 || 0%{?fedora}
+%define selinuxtype targeted
+%define with_selinux 1
+%define selinux_policy_version %(rpm --quiet -q selinux-policy && rpm -q --queryformat "%{V}-%{R}" selinux-policy || echo 1)
 %endif
 
 BuildRequires: gcc
@@ -125,6 +132,11 @@ BuildRequires: gdb
 # For documentation
 BuildRequires: xmlto
 
+%if 0%{?with_selinux}
+BuildRequires:  selinux-policy
+BuildRequires:  selinux-policy-devel
+%endif
+
 # This is the "cockpit" metapackage. It should only
 # Require, Suggest or Recommend other cockpit-xxx subpackages
 
@@ -165,6 +177,11 @@ exec 2>&1
 
 make -j4 %{?extra_flags} all
 
+%if 0%{?with_selinux}
+    make -f /usr/share/selinux/devel/Makefile cockpit.pp
+    bzip2 -9 cockpit.pp
+%endif
+
 %check
 exec 2>&1
 # HACK: Fedora koji builders are very slow, unreliable, and inaccessible for debugging; https://github.com/cockpit-project/cockpit/issues/13909
@@ -188,6 +205,14 @@ mkdir -p $RPM_BUILD_ROOT%{_sysconfdir}/pam.d
 install -p -m 644 tools/cockpit.pam $RPM_BUILD_ROOT%{_sysconfdir}/pam.d/cockpit
 rm -f %{buildroot}/%{_libdir}/cockpit/*.so
 install -D -p -m 644 AUTHORS COPYING README.md %{buildroot}%{_docdir}/cockpit/
+
+%if 0%{?with_selinux}
+    install -D -m 644 %{name}.pp.bz2 %{buildroot}%{_datadir}/selinux/packages/%{selinuxtype}/%{name}.pp.bz2
+    install -D -m 644 -t %{buildroot}%{_mandir}/man8 selinux/%{name}_session_selinux.8cockpit
+    install -D -m 644 -t %{buildroot}%{_mandir}/man8 selinux/%{name}_ws_selinux.8cockpit
+    # create this directory in the build root so that %ghost sees the desired mode
+    install -d -m 700 %{buildroot}%{_sharedstatedir}/selinux/%{selinuxtype}/active/modules/200/%{name}
+%endif
 
 # only ship deprecated PatternFly API for stable releases
 %if 0%{?fedora} <= 33 || 0%{?rhel} <= 8
@@ -247,6 +272,7 @@ echo '%dir %{_datadir}/cockpit/playground' > tests.list
 find %{buildroot}%{_datadir}/cockpit/playground -type f >> tests.list
 
 echo '%dir %{_datadir}/cockpit/static' > static.list
+echo '%dir %{_datadir}/cockpit/static/fonts' >> static.list
 find %{buildroot}%{_datadir}/cockpit/static -type f >> static.list
 
 # when not building basic packages, remove their files
@@ -291,8 +317,6 @@ sed -i "s|%{buildroot}||" *.list
 pushd %{buildroot}/%{_datadir}/cockpit/branding
 find -L * -type l -printf "%H\n" | sort -u | xargs rm -rv
 popd
-# need this in SUSE as post build checks dislike stale symlinks
-install -m 644 -D /dev/null %{buildroot}/run/cockpit/motd
 %else
 %global _debugsource_packages 1
 %global _debuginfo_subpackages 0
@@ -390,10 +414,9 @@ Provides: cockpit-shell = %{version}-%{release}
 Provides: cockpit-systemd = %{version}-%{release}
 Provides: cockpit-tuned = %{version}-%{release}
 Provides: cockpit-users = %{version}-%{release}
-Obsoletes: cockpit-dashboard
+Obsoletes: cockpit-dashboard < %{version}-%{release}
 %if 0%{?rhel}
 Provides: cockpit-networkmanager = %{version}-%{release}
-Obsoletes: cockpit-networkmanager
 Requires: NetworkManager >= 1.6
 Provides: cockpit-kdump = %{version}-%{release}
 Requires: kexec-tools
@@ -412,7 +435,6 @@ Recommends: (reportd >= 0.7.1 if abrt)
 %endif
 # NPM modules which are also available as packages
 Provides: bundled(js-jquery) = %{npm-version:jquery}
-Provides: bundled(js-moment) = %{npm-version:moment}
 Provides: bundled(xstatic-bootstrap-datepicker-common) = %{npm-version:bootstrap-datepicker}
 Provides: bundled(xstatic-patternfly-common) = %{npm-version:patternfly}
 
@@ -427,6 +449,10 @@ Summary: Cockpit Web Service
 Requires: glib-networking
 Requires: openssl
 Requires: glib2 >= 2.50.0
+%if 0%{?with_selinux}
+Requires: (selinux-policy >= %{selinux_policy_version} if selinux-policy-%{selinuxtype})
+Requires(post): (policycoreutils if selinux-policy-%{selinuxtype})
+%endif
 Conflicts: firewalld < 0.6.0-1
 Recommends: sscg >= 2.3
 Recommends: system-logos
@@ -444,15 +470,13 @@ authentication via sssd/FreeIPA.
 %doc %{_mandir}/man8/cockpit-ws.8.gz
 %doc %{_mandir}/man8/cockpit-tls.8.gz
 %doc %{_mandir}/man8/remotectl.8.gz
-%doc %{_mandir}/man8/pam_cockpit_cert.8.gz
 %doc %{_mandir}/man8/pam_ssh_add.8.gz
 %dir %{_sysconfdir}/cockpit
 %config(noreplace) %{_sysconfdir}/cockpit/ws-certs.d
 %config(noreplace) %{_sysconfdir}/pam.d/cockpit
-%config %{_sysconfdir}/issue.d/cockpit.issue
-%config %{_sysconfdir}/motd.d/cockpit
-%ghost /run/cockpit/motd
-%ghost %dir /run/cockpit
+# created in %post, so that users can rm the files
+%ghost %{_sysconfdir}/issue.d/cockpit.issue
+%ghost %{_sysconfdir}/motd.d/cockpit
 %dir %{_datadir}/cockpit/motd
 %{_datadir}/cockpit/motd/update-motd
 %{_datadir}/cockpit/motd/inactive.motd
@@ -481,22 +505,63 @@ authentication via sssd/FreeIPA.
 %attr(4750, root, cockpit-wsinstance) %{_libexecdir}/cockpit-session
 %{_datadir}/cockpit/branding
 
+%if 0%{?with_selinux}
+    %{_datadir}/selinux/packages/%{selinuxtype}/%{name}.pp.bz2
+    %{_mandir}/man8/%{name}_session_selinux.8cockpit.*
+    %{_mandir}/man8/%{name}_ws_selinux.8cockpit.*
+    %ghost %{_sharedstatedir}/selinux/%{selinuxtype}/active/modules/200/%{name}
+%endif
+
 %pre ws
 getent group cockpit-ws >/dev/null || groupadd -r cockpit-ws
 getent passwd cockpit-ws >/dev/null || useradd -r -g cockpit-ws -d /nonexisting -s /sbin/nologin -c "User for cockpit web service" cockpit-ws
 getent group cockpit-wsinstance >/dev/null || groupadd -r cockpit-wsinstance
 getent passwd cockpit-wsinstance >/dev/null || useradd -r -g cockpit-wsinstance -d /nonexisting -s /sbin/nologin -c "User for cockpit-ws instances" cockpit-wsinstance
 
+%if 0%{?with_selinux}
+if %{_sbindir}/selinuxenabled 2>/dev/null; then
+    %selinux_relabel_pre -s %{selinuxtype}
+fi
+%endif
+
 %post ws
+%if 0%{?with_selinux}
+if %{_sbindir}/selinuxenabled 2>/dev/null; then
+    %selinux_modules_install -s %{selinuxtype} %{_datadir}/selinux/packages/%{selinuxtype}/%{name}.pp.bz2
+    %selinux_relabel_post -s %{selinuxtype}
+fi
+%endif
+
+# set up dynamic motd/issue symlinks on first-time install; don't bring them back on upgrades if admin removed them
+if [ "$1" = 1 ]; then
+    mkdir -p /etc/motd.d /etc/issue.d
+    ln -s /run/cockpit/motd /etc/motd.d/cockpit
+    ln -s /run/cockpit/motd /etc/issue.d/cockpit.issue
+fi
+
 %tmpfiles_create cockpit-tempfiles.conf
 %systemd_post cockpit.socket cockpit.service
 # firewalld only partially picks up changes to its services files without this
 test -f %{_bindir}/firewall-cmd && firewall-cmd --reload --quiet || true
 
+# check for deprecated PAM config
+if grep --color=auto pam_cockpit_cert {_sysconfdir}/pam.d/cockpit; then
+    echo '**** WARNING:'
+    echo '**** WARNING: pam_cockpit_cert is a no-op and will be removed in a'
+    echo '**** WARNING: future release; remove it from your /etc/pam.d/cockpit.'
+    echo '**** WARNING:'
+fi
+
 %preun ws
 %systemd_preun cockpit.socket cockpit.service
 
 %postun ws
+%if 0%{?with_selinux}
+if %{_sbindir}/selinuxenabled 2>/dev/null; then
+    %selinux_modules_uninstall -s %{selinuxtype} %{name}
+    %selinux_relabel_post -s %{selinuxtype}
+fi
+%endif
 %systemd_postun_with_restart cockpit.socket cockpit.service
 
 # -------------------------------------------------------------------------------
@@ -621,7 +686,7 @@ These files are not required for running Cockpit.
 %package -n cockpit-pcp
 Summary: Cockpit PCP integration
 Requires: cockpit-bridge >= %{required_base}
-Requires(post): pcp
+Requires: pcp
 
 %description -n cockpit-pcp
 Cockpit support for reading PCP metrics and loading PCP archives.
@@ -639,6 +704,8 @@ BuildArch: noarch
 Requires: cockpit-bridge >= %{required_base}
 Requires: PackageKit
 Recommends: python3-tracer
+# HACK: https://bugzilla.redhat.com/show_bug.cgi?id=1800468
+Requires: polkit
 
 %description -n cockpit-packagekit
 The Cockpit components for installing OS updates and Cockpit add-ons,

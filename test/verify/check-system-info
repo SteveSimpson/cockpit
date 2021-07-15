@@ -21,7 +21,6 @@ import re
 import time
 
 import parent
-import packagelib
 from testlib import *
 
 
@@ -209,7 +208,7 @@ class TestSystemInfo(MachineCase):
         self.addCleanup(m.execute, "umount /proc/uptime")
         with b.wait_timeout(70):
             b.wait_text("#system_uptime", "33 minutes")
-        # 4 months and a bit, moment humanize() rounds quite aggressively; also, test a slightly different format
+        # 4 months and a bit, timeformat rounds quite aggressively; also, test a slightly different format
         m.write("/tmp/fake_uptime", "10370000 12345.30\n")
         with b.wait_timeout(70):
             b.wait_text("#system_uptime", "4 months")
@@ -246,10 +245,10 @@ class TestSystemInfo(MachineCase):
 
         # Gain admin access
         b.click(".pf-c-alert:contains('Web console is running in limited access mode.') button:contains('Turn on')")
-        b.wait_in_text(".pf-c-modal-box:contains('Administrative access')", "Please authenticate")
-        b.set_input_text(".pf-c-modal-box:contains('Administrative access') input", "foobar")
+        b.wait_in_text(".pf-c-modal-box:contains('Switch to administrative access')", "Password for admin:")
+        b.set_input_text(".pf-c-modal-box:contains('Switch to administrative access') input", "foobar")
         b.click(".pf-c-modal-box button:contains('Authenticate')")
-        b.wait_not_present(".pf-c-modal-box:contains('Administrative access')")
+        b.wait_not_present(".pf-c-modal-box:contains('Switch to administrative access')")
         b.wait_not_visible(".pf-c-alert:contains('Web console is running in limited access mode.')")
 
         # Change the date
@@ -262,7 +261,7 @@ class TestSystemInfo(MachineCase):
         b.click("#system_information_change_systime .apply")
         b.wait_not_present("#system_information_change_systime")
 
-        b.wait_text("#system_information_systime_button", "Jan 24, 2037 8:03 AM")
+        b.wait_text("#system_information_systime_button", "Jan 24, 2037, 8:03 AM")
 
         self.assertFalse(ntp_enabled())
         self.assertIn("Sat Jan 24 08:03:", m.execute("date"))
@@ -291,10 +290,12 @@ class TestSystemInfo(MachineCase):
         self.assertIn("Mon Jun  4 06:34:", m.execute("date"))
         self.assertIn("EEST 2018\n", m.execute("date"))
 
-    @skipImage("Uses timedatex, no NTP servers config", "rhel-8-4", "rhel-8-5", "centos-8-stream")
     def testTimeServers(self):
         m = self.machine
         b = self.browser
+
+        # Fedora/RHEL/CentOS use chrony
+        uses_timesyncd = m.image.startswith("debian") or m.image.startswith("ubuntu")
 
         conf = "/etc/systemd/timesyncd.conf.d/50-cockpit.conf"
 
@@ -303,10 +304,22 @@ class TestSystemInfo(MachineCase):
         # Wait until everything is ready to go...
         b.wait_attr("#system_information_systime_button", "data-timedated-initialized", "true")
 
-        # Add two NTP servers.  We can't expect the servers to be used, so
-        # we only test that they get added.
         b.click("#system_information_systime_button")
         b.wait_visible("#system_information_change_systime")
+
+        # when not using timesyncd, the "specific NTP servers" option should be disabled
+        if not uses_timesyncd:
+            b.click("#system_information_change_systime label:contains('Set time') + div button")
+            b.wait_visible("#change_systime button:contains('Automatically using specific NTP servers').pf-m-disabled")
+            return
+
+        def get_timesyncd_start():
+            return int(m.execute("systemctl show -p ExecMainStartTimestampMonotonic --value systemd-timesyncd").strip())
+
+        prev_timesyncd_start = get_timesyncd_start()
+
+        # Add two NTP servers.  We can't expect the servers to be used, so
+        # we only test that they get added.
         self.set_change_time_dialog_mode("Automatically using specific NTP servers")
         b.set_input_text("#systime-ntp-servers tr:nth-child(1) input", "0.pool.ntp.org")
         b.click('#systime-ntp-servers tr:nth-child(1) .fa-plus')
@@ -317,9 +330,14 @@ class TestSystemInfo(MachineCase):
         self.assertIn("0.pool.ntp.org", m.execute("grep '^NTP=' %s" % conf))
         self.assertIn("1.pool.ntp.org", m.execute("grep '^NTP=' %s" % conf))
 
+        # restarts timesyncd to pick up the new config
+        wait(lambda: get_timesyncd_start() > prev_timesyncd_start, delay=0.2)
+        prev_timesyncd_start = get_timesyncd_start()
+
         # Set conf from the outside, check that we pick that up, and
         # switch to default servers.
         m.write(conf, "[Time]\nNTP=2.pool.ntp.org\n")
+        b.wait_attr("#system_information_systime_button", "data-timedated-initialized", "true")
         b.click("#system_information_systime_button")
         b.wait_visible("#system_information_change_systime")
         b.wait_val("#systime-ntp-servers tr:nth-child(1) input", "2.pool.ntp.org")
@@ -329,6 +347,9 @@ class TestSystemInfo(MachineCase):
         b.wait_not_present("#system_information_change_systime")
 
         self.assertIn("2.pool.ntp.org", m.execute("grep '^#NTP=' %s" % conf))
+
+        # restarts timesyncd to pick up the new config
+        wait(lambda: get_timesyncd_start() > prev_timesyncd_start, delay=0.2)
 
     def testMotd(self):
         m = self.machine
@@ -379,15 +400,16 @@ class TestSystemInfo(MachineCase):
         b.enter_page("/system/hwinfo")
 
         # system info
-        b.wait_in_text('#hwinfo .info-table-ct', "CPU")
+        b.wait_in_text('#hwinfo-system-info-list', "CPU")
         # QEMU VM type
-        b.wait_in_text('#hwinfo .info-table-ct tbody:nth-of-type(1) tr:nth-of-type(1) td', "Other")
+        b.wait_in_text('#hwinfo-system-info-list .hwinfo-system-info-list-item:nth-of-type(1) .pf-c-description-list__group:nth-of-type(1) dd', "Other")
         # Name
-        b.wait_in_text('#hwinfo .info-table-ct tbody:nth-of-type(1) tr:nth-of-type(2) td', "Standard PC")
+        b.wait_in_text('#hwinfo-system-info-list .hwinfo-system-info-list-item:nth-of-type(1) .pf-c-description-list__group:nth-of-type(2) dd', "Standard PC")
         # BIOS
-        b.wait_in_text('#hwinfo .info-table-ct tbody:nth-of-type(2) tr:nth-of-type(1) td', "SeaBIOS")
-        # BIOS date
-        b.wait_text('#hwinfo .info-table-ct tbody:nth-of-type(2) tr:nth-of-type(3) td', m.execute("cat /sys/class/dmi/id/bios_date").strip())
+        b.wait_in_text('#hwinfo-system-info-list .hwinfo-system-info-list-item:nth-of-type(2) .pf-c-description-list__group:nth-of-type(1) dd', "SeaBIOS")
+        # BIOS date gets parsed
+        parsed_bios_date = m.execute("date --date $(cat /sys/class/dmi/id/bios_date) '+%B %-d, %Y'").strip()
+        b.wait_text('#hwinfo-system-info-list .hwinfo-system-info-list-item:nth-of-type(2) .pf-c-description-list__group:nth-of-type(3) dd', parsed_bios_date)
 
         pci_selector = '#hwinfo #pci-listing'
         heading_selector = ' .pf-c-card__title'
@@ -424,9 +446,9 @@ class TestSystemInfo(MachineCase):
         b.enter_page("/system/hwinfo")
 
         # CPU should still be shown, but not the DMI fields
-        b.wait_in_text('#hwinfo .info-table-ct', "CPU")
-        self.assertNotIn('Type', b.text('#hwinfo .info-table-ct'))
-        self.assertNotIn('BIOS', b.text('#hwinfo .info-table-ct'))
+        b.wait_in_text('#hwinfo-system-info-list', "CPU")
+        self.assertNotIn('Type', b.text('#hwinfo-system-info-list'))
+        self.assertNotIn('BIOS', b.text('#hwinfo-system-info-list'))
 
         # PCI should be shown
         b.wait_in_text(pci_selector + heading_selector, "PCI")
@@ -445,8 +467,8 @@ class TestSystemInfo(MachineCase):
         b.wait_in_text('#system_information_hardware_text', "VENDOR NAME")
         b.click(hardware_page_link)
         b.enter_page("/system/hwinfo")
-        b.wait_in_text('#hwinfo .info-table-ct tbody:nth-of-type(1) tr:nth-of-type(2) td', "NAME")
-        b.wait_in_text('#hwinfo .info-table-ct tbody:nth-of-type(1) tr:nth-of-type(3) td', "VENDOR")
+        b.wait_in_text('#hwinfo-system-info-list .hwinfo-system-info-list-item:nth-of-type(1) .pf-c-description-list__group:nth-of-type(2) dd', "NAME")
+        b.wait_in_text('#hwinfo-system-info-list .hwinfo-system-info-list-item:nth-of-type(1) .pf-c-description-list__group:nth-of-type(3) dd', "VENDOR")
 
         # /proc/cpuinfo on x86; very incomplete, just what pkg/lib/machine-info.js looks at
         m.write("/tmp/cpuinfo", """processor\t: 0
@@ -464,7 +486,7 @@ model name\t: Professor NumberCrunch
 
         b.reload()
         b.enter_page('/system/hwinfo')
-        b.wait_in_text('#hwinfo .info-table-ct', "2x Professor NumberCrunch")
+        b.wait_in_text('#hwinfo-system-info-list .hwinfo-system-info-list-item:nth-of-type(2) .pf-c-description-list__group:nth-of-type(1) dd', "2x Professor NumberCrunch")
 
         # /proc/cpuinfo on PowerPC; complete info
         m.write("/tmp/cpuinfo", """processor\t: 0
@@ -480,7 +502,7 @@ revision\t: 2.3 (pvr 004e 1203)
 
         b.reload()
         b.enter_page('/system/hwinfo')
-        b.wait_in_text('#hwinfo .info-table-ct', "2x POWER9 (architected), altivec supported")
+        b.wait_in_text('#hwinfo-system-info-list .hwinfo-system-info-list-item:nth-of-type(2) .pf-c-description-list__group:nth-of-type(1) dd', "2x POWER9 (architected), altivec supported")
 
         # Memory details should be shown for generic QEMU memory
         # demidecode not available on certain images
@@ -528,8 +550,8 @@ revision\t: 2.3 (pvr 004e 1203)
                 b.login_and_go('/system/hwinfo')
 
                 if not expect_link_present:
-                    b.wait_visible('#hwinfo th:contains(CPU)')
-                    b.wait_not_present('#hwinfo th:contains(CPU security)')
+                    b.wait_in_text('#hwinfo-system-info-list', "CPU")
+                    b.wait_not_in_text('#hwinfo-system-info-list', "CPU security")
                 else:
                     b.click('#hwinfo button:contains(Mitigations)')
 
@@ -756,52 +778,6 @@ password=foobar
         # should go back to initial_usage; often below, due to paged out stuff
         wait(lambda: progressValue(2) <= initial_usage)
         self.assertGreater(progressValue(2), 10)
-
-
-@skipDistroPackage()
-class TestPcp(packagelib.PackageCase):
-
-    def testEnablePcpLink(self):
-        m = self.machine
-        b = self.browser
-
-        # the OSTree images don't have pcp and can't install additional software
-        if m.ostree_image:
-            self.login_and_go("/system")
-            b.wait_not_present("#server-pmlogger-switch")
-            b.wait_not_present("#system-configuration-enable-pcp-link")
-            return
-
-        m.execute("pkcon remove -y pcp")
-
-        pmlogger = {
-            "/usr/bin/pmlogger": "",
-            "/etc/systemd/system/pmlogger.service": "[Service]\nExecStart=/bin/sh -c \"while [ ! -f /tmp/pmlogger.start ]; do sleep 1; done\"\nType=oneshot\nRemainAfterExit=true"
-        }
-
-        self.createPackage("cockpit-pcp", "999", "1", content=pmlogger,
-                           postinst="chmod +x /usr/bin/pmlogger; systemctl daemon-reload")
-        self.enableRepo()
-        m.execute("pkcon refresh")
-
-        # the offer to install it should be visible
-        self.login_and_go("/system")
-        b.wait_not_present("#server-pmlogger-switch")
-        b.wait_in_text("#system-configuration-enable-pcp-link", "Enable stored metrics")
-        b.click("#system-configuration-enable-pcp-link")
-        b.click(".pf-c-modal-box__footer button:contains('Install')")
-        b.wait_not_present(".pf-c-modal-box:contains('Install software')")
-
-        b.wait_visible("#server-pmlogger-switch")
-        b.wait_not_present("#system-configuration-enable-pcp-link")
-
-        # Turn stored metrics on
-        b.wait_visible("#server-pmlogger-switch:not(:checked)")
-        b.click("#server-pmlogger-switch")
-        b.wait_visible("#server-pmlogger-switch:disabled")
-        m.execute("touch /tmp/pmlogger.start")
-        b.wait_visible("#server-pmlogger-switch:not(:disabled)")
-        b.wait_visible("#server-pmlogger-switch:checked")
 
 
 if __name__ == '__main__':

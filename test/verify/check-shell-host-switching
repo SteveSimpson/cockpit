@@ -22,7 +22,6 @@ import time
 
 import parent
 from testlib import *
-from machine_core.constants import TEST_OS_DEFAULT
 
 
 @skipDistroPackage()
@@ -118,11 +117,10 @@ class TestHostSwitching(MachineCase, HostSwitcherHelpers):
         # Disable preloading on all machines ("machine1" is done in testlib.py)
         # Preloading on machines with debug build can overload the browser and cause slowness and browser crashes
         # In these tests we actually switch between machines in quick succession which can make things even worse
-        if self.machine.image == TEST_OS_DEFAULT:
-            self.machines["machine2"].write("/usr/share/cockpit/packagekit/override.json", '{ "preload": [ ] }')
-            self.machines["machine2"].write("/usr/share/cockpit/systemd/override.json", '{ "preload": [ ] }')
-            self.machines["machine3"].write("/usr/share/cockpit/packagekit/override.json", '{ "preload": [ ] }')
-            self.machines["machine3"].write("/usr/share/cockpit/systemd/override.json", '{ "preload": [ ] }')
+        if self.is_devel_build():
+            for machine in ["machine2", "machine3"]:
+                for pkg in ["packagekit", "systemd", "playground"]:
+                    self.machines[machine].write(f"/usr/share/cockpit/{pkg}/override.json", '{ "preload": [ ] }')
         # Also, quick logouts cause async preloads to run into "ReferenceError: cockpit is not defined"
         self.disable_preload("packagekit", "playground", "systemd")
 
@@ -130,6 +128,10 @@ class TestHostSwitching(MachineCase, HostSwitcherHelpers):
         self.machines["machine2"].execute("hostnamectl set-hostname machine2")
         self.machines["machine3"].execute("hostnamectl set-hostname machine3")
         self.setup_ssh_auth()
+
+        # removing machines interrupts channels
+        self.allow_restart_journal_messages()
+        self.allow_hostkey_messages()
 
     def testBasic(self):
         b = self.browser
@@ -239,9 +241,6 @@ class TestHostSwitching(MachineCase, HostSwitcherHelpers):
         b.wait_js_cond('window.location.pathname == "/system"')
         b.enter_page("/system", "localhost")
 
-        # removing machines interrupts channels
-        self.allow_restart_journal_messages()
-        self.allow_hostkey_messages()
         self.allow_journal_messages(".*server offered unsupported authentication methods: password public-key.*")
 
     def testBasicAsAdmin(self):
@@ -323,8 +322,6 @@ class TestHostSwitching(MachineCase, HostSwitcherHelpers):
         self.check_discovered_addresses(b, [])
         self.check_discovered_addresses(b2, [])
 
-        self.allow_hostkey_messages()
-
     def testEdit(self):
         b = self.browser
         m1 = self.machines['machine1']
@@ -397,8 +394,6 @@ class TestHostSwitching(MachineCase, HostSwitcherHelpers):
         b.wait_not_present(".nav-item span[data-for='/@10.111.113.3']")
         b.wait_text(".nav-item span[data-for='/@10.111.113.2']", "admin @machine2")
 
-        self.allow_hostkey_messages()
-
     def testNoAutoconnect(self):
         b = self.browser
         m2 = self.machines["machine2"]
@@ -416,9 +411,6 @@ class TestHostSwitching(MachineCase, HostSwitcherHelpers):
         b.relogin()
         time.sleep(60)
         self.assertNotIn(m2.execute("loginctl"), "admin")
-
-        self.allow_restart_journal_messages()
-        self.allow_hostkey_messages()
 
 
 @skipDistroPackage()
